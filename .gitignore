@@ -69,4 +69,5 @@ Testing/
 .cache/
 
 # Custom Rules
+WIP_STATE.md
 .gitignore.bak

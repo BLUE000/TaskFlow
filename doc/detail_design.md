@@ -41,7 +41,7 @@ TaskFlow/
 TaskFlow-Client/
 ├── CMakeLists.txt            # ビルド定義
 ├── include/
-│   # TransCipher 公開ヘッダー (TransCipher-Dist からコピー)
+│   # TransCipher 公開ヘッダー
 │   ├── cipher_engine.h
 │   └── ...
 ├── src/
@@ -50,18 +50,21 @@ TaskFlow-Client/
 │   │   ├── crypto_util.h     # TransCipher ラッパー
 │   │   └── crypto_util.cpp
 │   ├── database/
-│   │   ├── db_manager.h      # SQLite/MySQL コネクション管理
+│   │   ├── db_manager.h      # SQLiteコネクション管理
 │   │   ├── db_manager.cpp
-│   │   ├── local_storage.h   # SQLiteデータ操作
-│   │   ├── local_storage.cpp
-│   │   ├── remote_storage.h  # MySQLデータ操作
-│   │   └── remote_storage.cpp
+│   │   ├── local_storage.h   # SQLiteデータ操作 (キャッシュデータ)
+│   │   └── local_storage.cpp
+│   ├── network/
+│   │   ├── network_manager.h  # Qt HTTP通信用クラス (QNetworkAccessManagerラッパー)
+│   │   ├── network_manager.cpp
+│   │   ├── sync_client.h      # PHP同期API呼び出しクライアント
+│   │   └── sync_client.cpp
 │   ├── model/
 │   │   ├── schedule.h        # 予定データ構造
 │   │   ├── time_slot.h       # 時間枠データ構造
 │   │   └── webhook.h         # Webhookデータ構造
 │   ├── sync/
-│   │   ├── sync_engine.h     # 同期・衝突検知ロジック
+│   │   ├── sync_engine.h     # 同期・衝突検知・解決ステート管理
 │   │   └── sync_engine.cpp
 │   ├── scheduler/
 │   │   ├── scheduler.h       # 負荷警告計算エンジン
@@ -74,8 +77,9 @@ TaskFlow-Client/
 │       ├── conflict_dialog.cpp
 │       └── conflict_dialog.ui
 └── thirdparty/
-    └── transcipher/          # TransCipher.dll (Windows), libTransCipher.so (Linux) 等の配置
+    └── transcipher/          # TransCipher.dll 等の配置
 ```
+
 
 ---
 

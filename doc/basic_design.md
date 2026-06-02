@@ -7,9 +7,11 @@
 
 ## 1. システム構成とデータフロー
 
+さくらインターネット（共有レンタルサーバー等）の本番環境における「MySQLデータベースの外部直接接続制限（ローカルPCからの直接ポート接続の遮断）」に対応するため、C++ デスクトップアプリは MySQL サーバーへ直接ポート接続せず、**PHPが提供する同期用Web API（HTTPS JSON通信）** を介してデータの同期処理を行います。
+
 ```mermaid
 graph TD
-    subgraph Web Server (MySQL 8.0)
+    subgraph Web Server (さくらインターネット本番環境)
         PHP[PHP 8.1 API/Web]
         DB_Remote[(MySQL 8.0 Remote DB)]
         TransPHP[TransCipher PHP]
@@ -27,12 +29,13 @@ graph TD
     QtGUI <-->|QSQLITE| DB_Local
     QtGUI <-->|DLL Link| TransCPP
     
-    QtGUI -.->|MySQL同期 (インターネット経由)| DB_Remote
+    QtGUI <-->|HTTPS JSON API (Port 443)| PHP
 ```
 
 * **常時オンライン (Web側)**: 一般閲覧者向けのカレンダー/ガントチャート表示、および管理者のWebログイン操作は、常にリモートDB（MySQL）の最新データを参照します。
-* **オフライン対応 (C++デスクトップ側)**: インターネット未接続時でもローカルの SQLite 3 からデータを読み書き可能。オンライン復帰時にリモートDBと同期を行います。
+* **オフライン対応 (C++デスクトップ側)**: インターネット未接続時でもローカルの SQLite 3 からデータを読み書き可能。オンライン復帰時に、Web API（HTTPS）経由でリモートDB（MySQL）とデータ同期を行います。
 * **データ保護**: ローカルDB（SQLite）内のキャッシュおよびリモートDB（MySQL）内の機密データは、常に `TransCipher` で暗号化された状態で保存されます。
+* **ビルドの簡素化メリット**: C++アプリからMySQL接続用ドライバの依存が消え、Qtの標準ネットワーク機能（`QNetworkAccessManager`）のみで完結するため、Windows, macOS, Linux でのビルド・配布が極めて容易になります。
 
 ---
 
