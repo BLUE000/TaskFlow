@@ -1,136 +1,357 @@
-# TaskFlow 詳細設計書 (Detail Design)
+# TaskFlow 詳細設計書 (Detailed Design)
 
-本システムにおいて、同期アルゴリズム、作業負荷計算ロジック、および暗号化連携の例外ハンドリングといったコアロジックの動作フローを定義します。
+本設計書は、基本設計に基づき、PHP（Web側）および C++（Qt6デスクトップ側）の各機能モジュールの具体的なクラス設計、関数定義（メソッドシグネチャ）、実行されるSQLクエリ、および同期アルゴリズムの詳細な処理フローを定義します。
 
 ---
 
-## 1. 同期アルゴリズムと競合（衝突）解決シーケンス
+## 1. 開発ディレクトリ構成
 
-C++（Qt6）アプリと Web（MySQL）側が双方向で同期する際の具体的なデータ処理手順と競合判定をシーケンスとして定義します。
+各機能モジュールの独立性を確保するため、以下のディレクトリ構造で実装を行います。
 
-### 1.1. 同期のトリガーと事前処理
-1. **オンライン疎通確認**: C++アプリは定期的に、または手動同期のタイミングで MySQL データベースへの接続テストを実行します。
-2. **最終同期時刻の取得**: SQLiteの `sync_metadata` テーブルから設定キー `last_synced_at` の値（タイムスタンプ $T_{sync}$）を取得します。
-   * 初期状態（未同期）の場合、$T_{sync} =$ `'1970-01-01 00:00:00'` とします。
-
-### 1.2. 双方向同期処理のシーケンス
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant LocalDB as SQLite (ローカル)
-    participant Sync as Qt6 SyncEngine
-    participant RemoteDB as MySQL (リモート)
-    participant UI as Qt6 GUI (ダイアログ)
-
-    Sync->>LocalDB: ① 最終同期時刻 $T_{sync}$ を要求
-    LocalDB-->>Sync: $T_{sync}$ を返却
-
-    Sync->>RemoteDB: ② MySQL上の $T_{sync}$ 以降の更新レコード ($R_{list}$) を要求
-    RemoteDB-->>Sync: $R_{list}$ を返却
-
-    Sync->>LocalDB: ③ SQLite上の $T_{sync}$ 以降の更新レコード ($L_{list}$) を要求
-    LocalDB-->>Sync: $L_{list}$ を返却
-
-    rect rgb(240, 240, 250)
-        note over Sync: ④ 衝突(競合)の判定ループ (同一UUIDレコードの検査)
-    end
-
-    alt 競合なし（ローカルのみ更新、またはリモートのみ更新の場合）
-        Sync->>RemoteDB: ローカルの新規/変更レコードをMySQLへ書き込み
-        Sync->>LocalDB: リモートの新規/変更レコードをSQLiteへ書き込み
-    else 競合あり（ローカルとリモートの双方が last_synced_at 以降に更新されている場合）
-        Sync->>UI: ⑤ 衝突レコードを通知し、競合解決画面を表示要請
-        UI-->>Sync: ユーザーの決定（ローカル優先/リモート優先/手動マージ結果）を返却
-        Sync->>RemoteDB: 解決済みマージデータをMySQLへ書き込み
-        Sync->>LocalDB: 解決済みマージデータをSQLiteへ書き込み
-    end
-
-    Sync->>LocalDB: ⑥ 最終同期時刻 $T_{sync}$ を現在のサーバー時刻へ更新
+### 1.1. PHP (Web側) ディレクトリ構成
+```
+TaskFlow/
+├── config/
+│   └── config.php            # 環境設定（DB接続、TransCipherトークン等）
+├── database/
+│   ├── schema.sql            # MySQLスキーマ
+│   └── schema_sqlite.sql     # SQLiteスキーマ
+├── doc/
+│   ├── basic_design.md       # 基本設計書
+│   └── detail_design.md      # 詳細設計書 (本ファイル)
+├── src/
+│   ├── Common/
+│   │   └── Security/
+│   │       └── CryptoUtil.php # TransCipher ラッパー
+│   ├── Holiday/
+│   │   └── HolidayParser.php  # 祝日CSV解析
+│   ├── Notification/
+│   │   └── DiscordNotifier.php# Discord Webhook通知
+│   └── Repository/
+│       ├── ScheduleRepository.php
+│       ├── TimeSlotRepository.php
+│       └── WebhookRepository.php
+└── public/
+    ├── index.php             # 一般閲覧用画面 (カレンダー・ガントチャート)
+    └── admin.php             # 管理用Web API / 簡易ダッシュボード
 ```
 
-### 1.3. 競合（衝突）解決オプションのデータ処理
-同一UUIDのレコードで衝突があった場合のデータマージ方法：
-1. **ローカル側（SQLite）を優先する場合**:
-   * リモート(MySQL)に対して、ローカルレコードを上書き（`UPDATE`）します。
-   * `updated_at` を現在のシステム時刻に再更新し、同期の連鎖が無限ループしないように確定させます。
-2. **Web側（MySQL）を優先する場合**:
-   * ローカル(SQLite)に対して、リモートレコードを上書き（`UPDATE`）します。
-   * `updated_at` はリモートの値をそのまま維持し、同期完了とみなします。
-3. **手動解決（再編集）の場合**:
-   * ユーザーがダイアログ上のマージ入力欄で編集した結果を適用します。
-   * 作成されたマージデータ（`updated_at` を現在のシステム時刻に更新）を、ローカル（SQLite）とリモート（MySQL）の双方に `UPDATE` して保存します。
-
----
-
-## 2. 作業時間枠の負荷オーバーフロー警告ロジック
-
-タスクの「重み」が、割り当てられた作業時間枠の制限時間をオーバーしているかどうかを判定するロジックです。
-
-### 2.1. 負荷計算の対象とデータ単位
-* **計算タイミング**:
-  * Web / C++アプリの予定表示画面（カレンダー/ガントチャート）のロード・描画時。
-  * タスクの追加・編集、カレンダー上でのドラッグ＆ドロップによる時間枠・日付の移動検知時。
-* **集計単位**: 「日付」ごと、かつ「時間枠（`time_slot_id`）」ごとに集計します。
-* **集計対象タスク**:
-  * `schedules.type = 'task'`（タスク）であること。
-  * `status != 'done'`（未完了状態のタスクのみを集計対象とし、完了済みタスクの重みは除外します）。
-  * `is_deleted = 0` であること。
-
-### 2.2. 計算アルゴリズム
-特定の日付 $D$ と、作業時間枠 $S$ において：
-1. 日付 $D$ の時間枠 $S$ に割り当てられているタスクの集合 $T_{D,S}$ を抽出します。
-   * 条件: `time_slot_id = S.id` 且つ `start_at` の日付部分が $D$。
-2. 集合 $T_{D,S}$ に含まれる各タスクの `weight` （所要時間：時間単位）の合計値 $W_{total}$ を算出します。
-   $$W_{total} = \sum_{t \in T_{D,S}} t.weight$$
-3. 時間枠 $S$ の制限時間 $S.limit\_hours$ と $W_{total}$ を比較します。
-4. **判定と視覚効果**:
-   * $W_{total} > S.limit\_hours$ の場合 ＝ **負荷オーバー警告（警告マーク表示、枠の黄色/赤ハイライト）**。
-   * 超過量 = $W_{total} - S.limit\_hours$
-
----
-
-## 3. TransCipher 接続設定および例外処理
-
-### 3.1. PHP 側の TransCipher 呼び出しと接続例外ハンドリング
-PHP側では、データの暗号化・復号処理を外部のAPIサーバーに委譲します（`CipherEngine.php`）。
-そのため、ネットワークタイムアウトやAPIサーバー停止などの「API接続エラー」に対する例外処理が必要です。
-
-* **例外処理フロー**:
-  * 接続失敗（APIが `null` または非200レスポンスを返した）時、システムはデータ保存/復号処理を中断し、データベースのトランザクションを **ロールバック** します。
-  * ユーザーに対しては「セキュアデータ接続エラーにより保存に失敗しました」等の明確なエラーメッセージを提示し、データが中途半端に未暗号化のまま保存されたり、破壊されたりするのを防ぎます。
-* **接続パラメータ定義**:
-  * `src/config.php` または `.env` 等で以下のように秘密鍵とAPI情報を定義し、起動時に `CryptoUtil::init()` で一括ロードします。
-
-```php
-// config.php
-define('TRANSCIPHER_KEY', 'your-secret-salt-key-here');
-define('TRANSCIPHER_API_URL', 'https://streamers-tool.sakura.ne.jp/TransCipher/api.php');
-define('TRANSCIPHER_API_TOKEN', 'your-authorized-token-here');
+### 1.2. C++ (Qt 6 デスクトップ側) ディレクトリ構成
+```
+TaskFlow-Client/
+├── CMakeLists.txt            # ビルド定義
+├── include/
+│   # TransCipher 公開ヘッダー (TransCipher-Dist からコピー)
+│   ├── cipher_engine.h
+│   └── ...
+├── src/
+│   ├── main.cpp
+│   ├── common/
+│   │   ├── crypto_util.h     # TransCipher ラッパー
+│   │   └── crypto_util.cpp
+│   ├── database/
+│   │   ├── db_manager.h      # SQLite/MySQL コネクション管理
+│   │   ├── db_manager.cpp
+│   │   ├── local_storage.h   # SQLiteデータ操作
+│   │   ├── local_storage.cpp
+│   │   ├── remote_storage.h  # MySQLデータ操作
+│   │   └── remote_storage.cpp
+│   ├── model/
+│   │   ├── schedule.h        # 予定データ構造
+│   │   ├── time_slot.h       # 時間枠データ構造
+│   │   └── webhook.h         # Webhookデータ構造
+│   ├── sync/
+│   │   ├── sync_engine.h     # 同期・衝突検知ロジック
+│   │   └── sync_engine.cpp
+│   ├── scheduler/
+│   │   ├── scheduler.h       # 負荷警告計算エンジン
+│   │   └── scheduler.cpp
+│   └── ui/
+│       ├── mainwindow.h      # メイン画面
+│       ├── mainwindow.cpp
+│       ├── mainwindow.ui
+│       ├── conflict_dialog.h # 競合解決ダイアログ
+│       ├── conflict_dialog.cpp
+│       └── conflict_dialog.ui
+└── thirdparty/
+    └── transcipher/          # TransCipher.dll (Windows), libTransCipher.so (Linux) 等の配置
 ```
 
+---
+
+## 2. PHP (Web側) クラス・メソッド詳細設計
+
+### 2.1. `CryptoUtil` クラス
+`TransCipher` への依存を隠蔽し、Base64 文字列のやり取りを行います。
+
 ```php
-// Exception Handling Example in PHP Wrapper
+namespace App\Common\Security;
+
+use TransCipher\CipherEngine;
+use TransCipher\RecipeManager;
+
 class CryptoUtil {
-    public static function decrypt(string $cipherTextBase64): ?string {
-        $binary = base64_decode($cipherTextBase64, true);
-        if ($binary === false) return null;
-        
-        $plain = CipherEngine::decrypt($binary, self::$secretKey);
-        if ($plain === null) {
-            // 例外をスローし、呼出元でDBロールバック等を実行
-            throw new \RuntimeException("TransCipher API communication failed or Invalid Secret Key.");
+    private static string $secretKey = "";
+
+    // 接続設定と秘密鍵の初期化
+    public static function init(string $secretKey, string $apiUrl, string $apiToken): void {
+        self::$secretKey = $secretKey;
+        CipherEngine::configure($apiUrl, $apiToken);
+    }
+
+    // 文字列を暗号化し、Base64形式で返却する。エラー時は RuntimeException をスロー
+    public static function encrypt(string $plainText): string {
+        if (empty($plainText)) return "";
+        $cipherBinary = CipherEngine::encrypt($plainText, self::$secretKey, RecipeManager::MODE_MANDATORY, "2.0");
+        if ($cipherBinary === null) {
+            throw new \RuntimeException("TransCipher encryption failed. Check API configuration or network.");
         }
-        return $plain;
+        return base64_encode($cipherBinary);
+    }
+
+    // Base64暗号化文字列を復号し、平文で返却する。エラー時は RuntimeException をスロー
+    public static function decrypt(string $cipherTextBase64): string {
+        if (empty($cipherTextBase64)) return "";
+        $binary = base64_decode($cipherTextBase64, true);
+        if ($binary === false) {
+            throw new \InvalidArgumentException("Invalid Base64 format.");
+        }
+        $plainText = CipherEngine::decrypt($binary, self::$secretKey);
+        if ($plainText === null) {
+            throw new \RuntimeException("TransCipher decryption failed. Invalid Key or API failure.");
+        }
+        return $plainText;
     }
 }
 ```
 
-### 3.2. C++ 側の DLL 読み込みと例外ハンドリング
-C++アプリ側では、ローカルの `TransCipher.dll` などを動的リンクして利用します。
+### 2.2. `ScheduleRepository` クラス
+データベースへの保存直前に `CryptoUtil::encrypt` を実行し、データ取得後に `CryptoUtil::decrypt` を行います。
 
-* **DLL読み込み・初期化チェック**:
-  * アプリ起動時に `TransCipher.dll` がシステムパスまたは実行バイナリと同ディレクトリに存在するかを確認します。存在しない場合は警告ダイアログを表示して終了します。
-* **復号エラー時の対応**:
-  * `CipherEngine::decrypt` の実行結果（`CipherResult`）が `CipherError::InvalidHeader` または `CipherError::ProcessFailed` を返した場合、現在の暗号化キー（秘密鍵）が不一致であると判断します。
-  * アプリは直ちにローカルデータの読み込み処理を中断し、ユーザーに「暗号化キーが異なります。設定画面で正しい秘密鍵を入力してください」と促すダイアログを表示します。
+```php
+namespace App\Repository;
+
+use PDO;
+use App\Common\Security\CryptoUtil;
+
+class ScheduleRepository {
+    private PDO $pdo;
+
+    public function __construct(PDO $pdo) {
+        $this->pdo = $pdo;
+    }
+
+    // 予定の保存 (新規・更新共通)
+    public function save(array $schedule): bool {
+        // 保存直前に暗号化を適用
+        $encryptedTitle = CryptoUtil::encrypt($schedule['title']);
+        $encryptedDesc = !empty($schedule['description']) ? CryptoUtil::encrypt($schedule['description']) : null;
+
+        $sql = "INSERT INTO schedules (
+                    id, title, description, type, start_at, end_at, status, priority, 
+                    weight, time_slot_id, category, is_public, discord_webhook_id, updated_at, is_deleted
+                ) VALUES (
+                    :id, :title, :description, :type, :start_at, :end_at, :status, :priority, 
+                    :weight, :time_slot_id, :category, :is_public, :discord_webhook_id, NOW(), :is_deleted
+                ) ON DUPLICATE KEY UPDATE
+                    title = :title,
+                    description = :description,
+                    type = :type,
+                    start_at = :start_at,
+                    end_at = :end_at,
+                    status = :status,
+                    priority = :priority,
+                    weight = :weight,
+                    time_slot_id = :time_slot_id,
+                    category = :category,
+                    is_public = :is_public,
+                    discord_webhook_id = :discord_webhook_id,
+                    updated_at = NOW(),
+                    is_deleted = :is_deleted";
+
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute([
+            ':id' => $schedule['id'],
+            ':title' => $encryptedTitle,
+            ':description' => $encryptedDesc,
+            ':type' => $schedule['type'],
+            ':start_at' => $schedule['start_at'] ?? null,
+            ':end_at' => $schedule['end_at'] ?? null,
+            ':status' => $schedule['status'] ?? 'todo',
+            ':priority' => $schedule['priority'] ?? 0,
+            ':weight' => $schedule['weight'] ?? 0.0,
+            ':time_slot_id' => $schedule['time_slot_id'] ?? null,
+            ':category' => $schedule['category'] ?? 'general',
+            ':is_public' => $schedule['is_public'] ?? 0,
+            ':discord_webhook_id' => $schedule['discord_webhook_id'] ?? null,
+            ':is_deleted' => $schedule['is_deleted'] ?? 0
+        ]);
+    }
+
+    // 一般閲覧者向け（公開かつ未削除）の全取得。取得後にタイトル/詳細を復号
+    public function findAllPublic(): array {
+        $sql = "SELECT * FROM schedules WHERE is_public = 1 AND is_deleted = 0 ORDER BY start_at ASC";
+        $stmt = $this->pdo->query($sql);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($results as &$row) {
+            $row['title'] = CryptoUtil::decrypt($row['title']);
+            if (!empty($row['description'])) {
+                $row['description'] = CryptoUtil::decrypt($row['description']);
+            }
+        }
+        return $results;
+    }
+}
+```
+
+---
+
+## 3. C++ (Qt 6) クラス・同期プロトコルの詳細設計
+
+### 3.1. `CryptoUtil` クラス (C++)
+`QByteArray` と `QString` のエンコード処理および `TransCipher` CLI/DLL 連携を仲介します。
+
+```cpp
+// crypto_util.h
+#ifndef CRYPTO_UTIL_H
+#define CRYPTO_UTIL_H
+
+#include <QString>
+#include "cipher_engine.h"
+
+class CryptoUtil {
+public:
+    static void init(const QString& secretKey) {
+        m_secretKey = secretKey;
+    }
+
+    static QString encrypt(const QString& plainText) {
+        if (m_secretKey.isEmpty() || plainText.isEmpty()) return "";
+        QByteArray plainBytes = plainText.toUtf8();
+        
+        // TransCipher 呼び出し
+        CipherResult result = CipherEngine::encrypt(plainBytes, m_secretKey, AesMode::Mandatory);
+        if (result.isSuccess()) {
+            return QString::fromLatin1(result.data().toBase64());
+        } else {
+            throw std::runtime_error(result.message().toStdString());
+        }
+    }
+
+    static QString decrypt(const QString& cipherTextBase64) {
+        if (m_secretKey.isEmpty() || cipherTextBase64.isEmpty()) return "";
+        QByteArray cipherBytes = QByteArray::fromBase64(cipherTextBase64.toLatin1());
+        
+        // TransCipher 呼び出し
+        CipherResult result = CipherEngine::decrypt(cipherBytes, m_secretKey);
+        if (result.isSuccess()) {
+            return QString::fromUtf8(result.data());
+        } else {
+            throw std::runtime_error(result.message().toStdString());
+        }
+    }
+
+private:
+    inline static QString m_secretKey = "";
+};
+
+#endif // CRYPTO_UTIL_H
+```
+
+### 3.2. `SyncEngine` クラス (同期処理・衝突検知)
+同期処理の開始から完了までを制御するステートマシンクラスです。
+
+```cpp
+// sync_engine.h
+#ifndef SYNC_ENGINE_H
+#define SYNC_ENGINE_H
+
+#include <QObject>
+#include <QDateTime>
+#include "model/schedule.h"
+
+class SyncEngine : public QObject {
+    Q_OBJECT
+public:
+    explicit SyncEngine(QObject *parent = nullptr);
+
+    // 同期処理を非同期で開始する
+    void startSync();
+
+signals:
+    // 同期進捗率の更新通知
+    void progressUpdated(int percentage);
+    // 競合（衝突）を検知したため、UI側に解決の入力を求めるシグナル
+    void conflictDetected(const Schedule& localSched, const Schedule& remoteSched);
+    // 同期完了通知
+    void syncFinished(bool success, const QString& message);
+
+private:
+    // 同期手順
+    void pullRemoteChanges();
+    void pushLocalChanges();
+    void resolveConflict(const Schedule& resolvedSched);
+
+    QDateTime m_lastSyncedAt;
+    QList<Schedule> m_conflictedSchedules;
+};
+
+#endif // SYNC_ENGINE_H
+```
+
+#### 同期時のデータ競合（衝突）検出クエリの流れ
+
+1. **MySQL 側からの更新取得（プル）**:
+   * SQLite 内の $T_{sync}$ (`last_synced_at`) を取得。
+   * MySQL に接続し、最終同期時刻以降に変更された全レコードを取得する。
+     ```sql
+     SELECT * FROM schedules WHERE updated_at > :last_synced_at;
+     ```
+2. **SQLite 側からの更新取得（プッシュ対象）**:
+   * SQLite から、最終同期時刻以降に変更されたローカルの全レコードを取得する。
+     ```sql
+     SELECT * FROM schedules WHERE updated_at > :last_synced_at;
+     ```
+3. **衝突の判定**:
+   * リモート更新リスト ($R_{list}$) とローカル更新リスト ($L_{list}$) の中で、`id` (UUID) が一致するレコードが存在するか走査する。
+   * 一致するレコードが存在し、かつデータの中身（暗号化タイトル、詳細、ステータス、時間枠ID等）に差分がある場合、**衝突 (Conflict)** と判定し、`conflictDetected` シグナルを発火する。
+
+---
+
+## 4. UI 遷移と状態制御設計
+
+### 4.1. 衝突（競合）解決ダイアログ (`ConflictDialog`)
+同期エンジンが衝突を検知すると、GUIスレッドがダイアログを表示して同期処理を一時サスペンドします。
+
+* **UI構造**:
+  * 画面左側: **ローカル(SQLite)データ** (更新日時、タイトル、詳細、ステータス、担当時間枠)
+  * 画面右側: **リモート(MySQL)データ** (更新日時、タイトル、詳細、ステータス、担当時間枠)
+  * 下部中央: **解決マージ入力エリア** (デフォルトで最新更新時間のデータをプレロード、自由編集可能)
+  * 操作ボタン: `[ローカルを優先]`、`[リモートを優先]`、`[手動マージ内容で確定]`
+* **処理フロー**:
+  1. ボタンが押下されると、ダイアログは選択された解決データを `Schedule` 構造体に格納して `SyncEngine` の `resolveConflict` スロットへ返却します。
+  2. 同期エンジンは、そのデータを MySQL と SQLite の双方に `updated_at = NOW()` を付与して更新保存し、サスペンドしていた同期処理を再開（次の競合レコードの検査へ移行）します。
+
+### 4.2. シームレスな予定登録UIのフロー
+「簡易予定」「期間予定」「個人タスク」の登録ステップを統一するフローです。
+
+```mermaid
+graph TD
+    A[予定追加ボタン押下] --> B[簡易ダイアログ: タイトル入力のみ]
+    B -->|保存ボタン押下| C[簡易予定 simple としてDB保存]
+    B -->|詳細設定を展開| D[詳細パネル表示]
+    D -->|日付/期間を設定| E[期間予定 period へ属性更新]
+    D -->|進捗/重みを設定| F[タスク task へ属性更新]
+    E -->|保存| G[共通 schedules テーブルへ保存]
+    F -->|保存| G
+```
+
+* **C++ (Qt6) 登録UI**:
+  * 登録フォームには、タイトル入力用の `QLineEdit` のみが初期表示されます。
+  * 「詳細を設定する」ボタンを押すとスライド（アコーディオン形式）で日付範囲選択（`QDateTimeEdit`）、重みスピンボックス（`QDoubleSpinBox`）、時間枠コンボボックス（`QComboBox`）が表示されます。
+  * 保存処理時、入力値の有無をチェックし：
+    * `weight == 0.0 && start_at == NULL` ➔ `type = 'simple'`
+    * `weight == 0.0 && start_at != NULL` ➔ `type = 'period'`
+    * `weight > 0.0` ➔ `type = 'task'`
+    として判定し、`type` カラムに代入してDBへ保存します。
