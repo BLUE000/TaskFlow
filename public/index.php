@@ -1,0 +1,1174 @@
+<?php
+/**
+ * TaskFlow 一般閲覧画面 (Calendar & Gantt Chart View)
+ */
+
+require_once __DIR__ . '/../config/config.php';
+
+// クラスオートローダーの登録
+spl_autoload_register(function ($class) {
+    $base_dir = __DIR__ . '/../src/';
+    $file = $base_dir . str_replace('\\', '/', $class) . '.php';
+    if (file_exists($file)) {
+        require $file;
+    }
+});
+
+use Common\Security\CryptoUtil;
+use Holiday\HolidayParser;
+use Repository\ScheduleRepository;
+use Repository\TimeSlotRepository;
+
+// TransCipher の初期化
+CryptoUtil::init(TRANSCIPHER_SECRET_KEY, TRANSCIPHER_API_URL, TRANSCIPHER_API_TOKEN);
+
+$db = get_db_connection();
+$scheduleRepo = new ScheduleRepository($db);
+$timeSlotRepo = new TimeSlotRepository($db);
+
+// データの取得 (公開設定されたもののみ)
+$schedules = $scheduleRepo->findAllPublic();
+$timeSlots = $timeSlotRepo->findAllActive();
+
+// 祝日データの取得
+$holidays = [];
+$holidayCsvPath = __DIR__ . '/../data/syukujitsu.csv';
+if (file_exists($holidayCsvPath)) {
+    try {
+        $holidays = HolidayParser::parse($holidayCsvPath);
+    } catch (\Exception $e) {
+        error_log("Failed to parse holiday CSV: " . $e->getMessage());
+    }
+}
+
+// XSS対策用のエスケープ関数
+function h(string $str): string {
+    return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
+}
+?>
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskFlow | スケジュール＆タスクボード</title>
+    <meta name="description" content="予定の俯瞰と時間枠ごとの作業負荷を視覚的に管理できるタスク・カレンダーシステム。">
+    <!-- Google Fonts: Outfit & Noto Sans JP -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-gradient-start: #0f172a;
+            --bg-gradient-end: #020617;
+            --panel-bg: rgba(30, 41, 59, 0.45);
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-blue: #38bdf8;
+            --accent-purple: #a855f7;
+            --accent-green: #10b981;
+            --accent-orange: #f97316;
+            --alert-red: #ef4444;
+            --alert-glow: rgba(239, 68, 68, 0.3);
+            --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', 'Noto Sans JP', sans-serif;
+            background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* アプリケーションレイアウト */
+        .app-container {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* プレミアムヘッダー */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--panel-border);
+        }
+
+        .logo-area h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-area p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.2rem;
+        }
+
+        /* モード切替タブ */
+        .view-controls {
+            display: flex;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--panel-border);
+            padding: 0.35rem;
+            border-radius: 12px;
+            gap: 0.25rem;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.6rem 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tab-btn.active {
+            color: var(--text-primary);
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(168, 85, 247, 0.2));
+            box-shadow: 0 0 15px -3px rgba(56, 189, 248, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+        }
+
+        /* メインビューエリア */
+        .view-panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--panel-border);
+            border-radius: 24px;
+            padding: 2rem;
+            box-shadow: var(--shadow-premium);
+            transition: var(--transition-smooth);
+            margin-bottom: 2rem;
+        }
+
+        /* 操作バー (年月移動など) */
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--panel-border);
+            color: var(--text-primary);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-blue);
+        }
+
+        .current-period {
+            font-size: 1.4rem;
+            font-weight: 700;
+            min-width: 180px;
+            text-align: center;
+        }
+
+        /* カレンダーグリッド */
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
+        }
+
+        .day-header {
+            text-align: center;
+            padding: 0.8rem 0;
+            font-weight: 700;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            border-bottom: 2px solid var(--panel-border);
+        }
+
+        .day-header.sunday { color: var(--alert-red); }
+        .day-header.saturday { color: var(--accent-blue); }
+
+        .calendar-cell {
+            min-height: 120px;
+            background: rgba(15, 23, 42, 0.35);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 0.5rem;
+            transition: var(--transition-smooth);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .calendar-cell:hover {
+            background: rgba(255, 255, 255, 0.02);
+            border-color: rgba(56, 189, 248, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .calendar-cell.other-month {
+            opacity: 0.3;
+        }
+
+        .cell-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .day-number {
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+
+        .holiday-label {
+            font-size: 0.7rem;
+            color: var(--alert-red);
+            font-weight: 500;
+            max-width: 70%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .calendar-cell.sunday .day-number,
+        .calendar-cell.holiday .day-number {
+            color: var(--alert-red);
+        }
+
+        .calendar-cell.saturday .day-number {
+            color: var(--accent-blue);
+        }
+
+        /* 予定アイテム */
+        .event-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex-grow: 1;
+            overflow-y: auto;
+            max-height: 90px;
+        }
+
+        .event-item {
+            font-size: 0.72rem;
+            padding: 0.25rem 0.4rem;
+            border-radius: 4px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+
+        .event-item:hover {
+            filter: brightness(1.2);
+            transform: scale(1.02);
+        }
+
+        .event-simple {
+            background: rgba(56, 189, 248, 0.15);
+            border-left: 3px solid var(--accent-blue);
+            color: #bae6fd;
+        }
+
+        .event-period {
+            background: rgba(168, 85, 247, 0.15);
+            border-left: 3px solid var(--accent-purple);
+            color: #f5d0fe;
+        }
+
+        .event-task {
+            background: rgba(16, 185, 129, 0.15);
+            border-left: 3px solid var(--accent-green);
+            color: #d1fae5;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .event-task.doing {
+            border-left-color: var(--accent-orange);
+            background: rgba(249, 115, 22, 0.15);
+            color: #ffedd5;
+        }
+
+        .task-weight-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+        }
+
+        /* 時間枠負荷警告表示 */
+        .load-indicator-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px;
+            margin-top: auto;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .load-indicator {
+            font-size: 0.65rem;
+            padding: 1px 4px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .load-indicator.warning {
+            background: var(--alert-red);
+            color: #fff;
+            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px var(--alert-glow);
+        }
+
+        /* ツールチップ */
+        .tooltip {
+            position: absolute;
+            background: #1e293b;
+            border: 1px solid var(--panel-border);
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            z-index: 100;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            pointer-events: none;
+            display: none;
+            max-width: 250px;
+        }
+
+        /* ガントチャート */
+        .gantt-container {
+            overflow-x: auto;
+            width: 100%;
+        }
+
+        .gantt-grid {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.25);
+        }
+
+        .gantt-left-panel {
+            border-right: 1px solid var(--panel-border);
+        }
+
+        .gantt-row-header {
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--panel-border);
+            height: 48px;
+            display: flex;
+            align-items: center;
+        }
+
+        .gantt-row-header.title-col {
+            font-weight: 700;
+            color: var(--text-secondary);
+            background: rgba(0,0,0,0.1);
+        }
+
+        .gantt-right-panel {
+            overflow-x: auto;
+        }
+
+        .gantt-timeline-header {
+            display: flex;
+            height: 48px;
+            border-bottom: 1px solid var(--panel-border);
+            background: rgba(0,0,0,0.1);
+        }
+
+        .gantt-header-cell {
+            flex-shrink: 0;
+            width: 40px;
+            text-align: center;
+            border-right: 1px solid rgba(255, 255, 255, 0.03);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+
+        .gantt-header-cell.sunday,
+        .gantt-header-cell.holiday {
+            color: var(--alert-red);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .gantt-header-cell.saturday {
+            color: var(--accent-blue);
+            background: rgba(56, 189, 248, 0.05);
+        }
+
+        .gantt-row-body {
+            display: flex;
+            height: 48px;
+            border-bottom: 1px solid var(--panel-border);
+            position: relative;
+            align-items: center;
+        }
+
+        .gantt-bar {
+            position: absolute;
+            height: 24px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            padding: 0 0.5rem;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: #fff;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gantt-bar.simple {
+            background: linear-gradient(90deg, var(--accent-blue), #0284c7);
+        }
+        .gantt-bar.period {
+            background: linear-gradient(90deg, var(--accent-purple), #7e22ce);
+        }
+        .gantt-bar.task {
+            background: linear-gradient(90deg, var(--accent-green), #047857);
+        }
+        .gantt-bar.task.doing {
+            background: linear-gradient(90deg, var(--accent-orange), #c2410c);
+        }
+
+        /* アニメーション */
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 0 8px var(--alert-glow); }
+            50% { transform: scale(1.05); box-shadow: 0 0 15px rgba(239, 68, 68, 0.6); }
+            100% { transform: scale(1); box-shadow: 0 0 8px var(--alert-glow); }
+        }
+
+        /* スマホ用レスポンシブ調整 */
+        @media (max-width: 768px) {
+            .app-container { padding: 1rem; }
+            header { flex-direction: column; gap: 1rem; align-items: flex-start; }
+            .calendar-grid { grid-template-columns: repeat(7, 1fr); gap: 4px; }
+            .calendar-cell { min-height: 80px; padding: 0.25rem; }
+            .event-item { font-size: 0.6rem; padding: 1px 2px; }
+            .event-list { max-height: 50px; }
+            .cell-header { margin-bottom: 0.2rem; }
+            .holiday-label { display: none; }
+            .gantt-grid { grid-template-columns: 120px 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo-area">
+                <h1 id="app-logo">TaskFlow</h1>
+                <p>ハイブリッド スケジュール ＆ 負荷分析ダッシュボード</p>
+            </div>
+            <div class="view-controls">
+                <button class="tab-btn active" id="tab-month" onclick="switchView('month')">
+                    月間カレンダー
+                </button>
+                <button class="tab-btn" id="tab-week" onclick="switchView('week')">
+                    週間スケジュール
+                </button>
+                <button class="tab-btn" id="tab-gantt" onclick="switchView('gantt')">
+                    ガントチャート
+                </button>
+            </div>
+        </header>
+
+        <!-- メインパネル -->
+        <main class="view-panel">
+            <div class="toolbar">
+                <div class="nav-controls">
+                    <button class="nav-btn" onclick="prevPeriod()">&lt;</button>
+                    <div class="current-period" id="period-title">2026年 6月</div>
+                    <button class="nav-btn" onclick="nextPeriod()">&gt;</button>
+                </div>
+                <div>
+                    <!-- 凡例やステータスを表示 -->
+                </div>
+            </div>
+
+            <!-- カレンダーコンテナ -->
+            <div id="calendar-view-container">
+                <div class="calendar-grid" id="calendar-grid-body">
+                    <!-- JavaScriptで動的生成されます -->
+                </div>
+            </div>
+
+            <!-- ガントチャートコンテナ (初期非表示) -->
+            <div id="gantt-view-container" style="display: none;">
+                <div class="gantt-container" id="gantt-chart-body">
+                    <!-- JavaScriptで動的生成されます -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ホバー詳細情報表示用のツールチップ -->
+    <div class="tooltip" id="cell-tooltip"></div>
+
+    <script>
+        // PHPから渡されたJSONデータをJavaScriptオブジェクトとして展開
+        const rawSchedules = <?php echo json_encode($schedules, JSON_UNESCAPED_UNICODE); ?>;
+        const timeSlots = <?php echo json_encode($timeSlots, JSON_UNESCAPED_UNICODE); ?>;
+        const holidays = <?php echo json_encode($holidays, JSON_UNESCAPED_UNICODE); ?>;
+
+        let currentDate = new Date(2026, 5, 1); // 2026年6月を初期値とする (月は0始まりなので 5=6月)
+        let currentView = 'month'; // 'month', 'week', 'gantt'
+
+        // ページロード時の初期化
+        window.addEventListener('DOMContentLoaded', () => {
+            renderView();
+        });
+
+        // 期間を戻す
+        function prevPeriod() {
+            if (currentView === 'month' || currentView === 'gantt') {
+                currentDate.setMonth(currentDate.getMonth() - 1);
+            } else if (currentView === 'week') {
+                currentDate.setDate(currentDate.getDate() - 7);
+            }
+            renderView();
+        }
+
+        // 期間を進める
+        function nextPeriod() {
+            if (currentView === 'month' || currentView === 'gantt') {
+                currentDate.setMonth(currentDate.getMonth() + 1);
+            } else if (currentView === 'week') {
+                currentDate.setDate(currentDate.getDate() + 7);
+            }
+            renderView();
+        }
+
+        // 表示の切り替え
+        function switchView(view) {
+            currentView = view;
+            
+            // タブのスタイリング切り替え
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            if (view === 'month') document.getElementById('tab-month').classList.add('active');
+            if (view === 'week') document.getElementById('tab-week').classList.add('active');
+            if (view === 'gantt') document.getElementById('tab-gantt').classList.add('active');
+
+            // 表示コンテナの切り替え
+            const calContainer = document.getElementById('calendar-view-container');
+            const ganttContainer = document.getElementById('gantt-view-container');
+            
+            if (view === 'gantt') {
+                calContainer.style.display = 'none';
+                ganttContainer.style.display = 'block';
+            } else {
+                calContainer.style.display = 'block';
+                ganttContainer.style.display = 'none';
+            }
+
+            renderView();
+        }
+
+        // 現在のビューに応じて描画を実行
+        function renderView() {
+            const periodTitle = document.getElementById('period-title');
+            
+            if (currentView === 'month') {
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth() + 1;
+                periodTitle.innerText = `${year}年 ${month}月`;
+                renderMonthCalendar();
+            } else if (currentView === 'week') {
+                const startOfWeek = getStartOfWeek(new Date(currentDate));
+                const endOfWeek = new Date(startOfWeek);
+                endOfWeek.setDate(endOfWeek.getDate() + 6);
+                
+                const startStr = `${startOfWeek.getFullYear()}/${startOfWeek.getMonth() + 1}/${startOfWeek.getDate()}`;
+                const endStr = `${endOfWeek.getFullYear() === startOfWeek.getFullYear() ? '' : endOfWeek.getFullYear() + '/'}${endOfWeek.getMonth() + 1}/${endOfWeek.getDate()}`;
+                periodTitle.innerText = `${startStr} 〜 ${endStr}`;
+                renderWeekCalendar(startOfWeek);
+            } else if (currentView === 'gantt') {
+                const year = currentDate.getFullYear();
+                const month = currentDate.getMonth() + 1;
+                periodTitle.innerText = `${year}年 ${month}月 (ガント)`;
+                renderGanttChart();
+            }
+        }
+
+        // 週の開始日（月曜日始まり）を取得する
+        function getStartOfWeek(date) {
+            const day = date.getDay();
+            const diff = date.getDate() - day + (day === 0 ? -6 : 1); // 日曜日の場合は前週の月曜日へ
+            return new Date(date.setDate(diff));
+        }
+
+        // 負荷計算 (指定日の各時間枠ごとの未完了タスク負荷)
+        // 判定基準: 未完了タスク(type='task', status != 'done')の重み合計
+        function calculateDailyLoad(dateStr) {
+            const loadMap = {};
+            
+            // 時間枠マップの初期化
+            timeSlots.forEach(slot => {
+                loadMap[slot.id] = {
+                    name: slot.name,
+                    limit: parseFloat(slot.limit_hours),
+                    current: 0.0,
+                    tasks: []
+                };
+            });
+
+            // 予定データの集計
+            rawSchedules.forEach(sched => {
+                if (sched.type === 'task' && sched.time_slot_id && sched.status !== 'done' && !parseInt(sched.is_deleted)) {
+                    // 日付の合致チェック (start_at を YYYY-MM-DD に変換)
+                    if (sched.start_at && sched.start_at.substring(0, 10) === dateStr) {
+                        const slotId = sched.time_slot_id;
+                        if (loadMap[slotId]) {
+                            const w = parseFloat(sched.weight) || 0.0;
+                            loadMap[slotId].current += w;
+                            loadMap[slotId].tasks.push({
+                                title: sched.title,
+                                weight: w,
+                                status: sched.status
+                            });
+                        }
+                    }
+                }
+            });
+
+            return loadMap;
+        }
+
+        // 月間カレンダーの描画
+        function renderMonthCalendar() {
+            const container = document.getElementById('calendar-grid-body');
+            container.className = "calendar-grid";
+            container.innerHTML = '';
+
+            // 曜日ヘッダー
+            const dayNames = ['月', '火', '水', '木', '金', '土', '日'];
+            dayNames.forEach((name, idx) => {
+                const header = document.createElement('div');
+                header.className = 'day-header';
+                if (idx === 5) header.classList.add('saturday');
+                if (idx === 6) header.classList.add('sunday');
+                header.innerText = name;
+                container.appendChild(header);
+            });
+
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+
+            // 月の初日と末日
+            const firstDayOfMonth = new Date(year, month, 1);
+            const lastDayOfMonth = new Date(year, month + 1, 0);
+
+            // カレンダー開始日（月曜日に合わせるために前月分を含める）
+            let startDay = firstDayOfMonth.getDay();
+            let prevDaysOffset = startDay === 0 ? 6 : startDay - 1; // 日曜日の場合は6日分、月曜日なら0日分
+
+            const calendarStart = new Date(firstDayOfMonth);
+            calendarStart.setDate(calendarStart.getDate() - prevDaysOffset);
+
+            // 6週間分 (42日分) 描画
+            for (let i = 0; i < 42; i++) {
+                const cellDate = new Date(calendarStart);
+                cellDate.setDate(calendarStart.getDate() + i);
+
+                const dateStr = formatDate(cellDate);
+                const cell = document.createElement('div');
+                cell.className = 'calendar-cell';
+                
+                // 土日判定
+                const dayOfWeek = cellDate.getDay();
+                if (dayOfWeek === 0) cell.classList.add('sunday');
+                if (dayOfWeek === 6) cell.classList.add('saturday');
+
+                // 当月外判定
+                if (cellDate.getMonth() !== month) {
+                    cell.classList.add('other-month');
+                }
+
+                // 祝日判定
+                let holidayName = '';
+                if (holidays[dateStr]) {
+                    cell.classList.add('holiday');
+                    holidayName = holidays[dateStr];
+                }
+
+                // セルヘッダー
+                const cellHeader = document.createElement('div');
+                cellHeader.className = 'cell-header';
+                
+                const dayNum = document.createElement('span');
+                dayNum.className = 'day-number';
+                dayNum.innerText = cellDate.getDate();
+                cellHeader.appendChild(dayNum);
+
+                if (holidayName) {
+                    const holidaySpan = document.createElement('span');
+                    holidaySpan.className = 'holiday-label';
+                    holidaySpan.innerText = holidayName;
+                    cellHeader.appendChild(holidaySpan);
+                }
+                cell.appendChild(cellHeader);
+
+                // 予定リスト
+                const listContainer = document.createElement('div');
+                listContainer.className = 'event-list';
+                
+                // その日の予定をフィルタリングして追加
+                const dailyEvents = rawSchedules.filter(sched => {
+                    if (parseInt(sched.is_deleted)) return false;
+                    
+                    if (sched.start_at) {
+                        const sDate = sched.start_at.substring(0, 10);
+                        if (sched.type === 'period' && sched.end_at) {
+                            const eDate = sched.end_at.substring(0, 10);
+                            return dateStr >= sDate && dateStr <= eDate;
+                        }
+                        return sDate === dateStr;
+                    }
+                    return false;
+                });
+
+                dailyEvents.forEach(event => {
+                    const evItem = document.createElement('div');
+                    evItem.className = `event-item event-${event.type}`;
+                    
+                    let prefix = "";
+                    if (event.type === 'task') {
+                        evItem.classList.add(event.status); // doing, todo
+                        prefix = `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
+                    }
+                    
+                    evItem.innerHTML = `${prefix}${escapeHtml(event.title)}`;
+                    evItem.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        showEventDetail(event, cellDate);
+                    });
+                    listContainer.appendChild(evItem);
+                });
+                cell.appendChild(listContainer);
+
+                // 負荷インジケータの計算と描画
+                const dailyLoad = calculateDailyLoad(dateStr);
+                const loadIndicatorContainer = document.createElement('div');
+                loadIndicatorContainer.className = 'load-indicator-container';
+                
+                let hasAlert = false;
+                let alertDetails = [];
+
+                Object.keys(dailyLoad).forEach(slotId => {
+                    const load = dailyLoad[slotId];
+                    if (load.tasks.length > 0) {
+                        const ind = document.createElement('span');
+                        ind.className = 'load-indicator';
+                        
+                        // limit_hours を超えている場合は警告色にする
+                        if (load.current > load.limit) {
+                            ind.classList.add('warning');
+                            hasAlert = true;
+                            alertDetails.push(`${load.name}: ${load.current}h / 制限${load.limit}h`);
+                        } else {
+                            ind.innerText = `${load.name.substring(0,2)}:${load.current}h`;
+                            loadIndicatorContainer.appendChild(ind);
+                        }
+                    }
+                });
+
+                // 警告が発生している時間枠がある場合は、目立たせて先頭に配置
+                if (hasAlert) {
+                    const alertInd = document.createElement('span');
+                    alertInd.className = 'load-indicator warning';
+                    alertInd.innerText = `⚠ 負荷警告`;
+                    loadIndicatorContainer.prepend(alertInd);
+
+                    // セル全体にホバー時のツールチップイベントを追加
+                    cell.addEventListener('mouseenter', (e) => {
+                        showTooltip(e, `<strong>時間枠の許容負荷超過</strong><br>${alertDetails.join('<br>')}`);
+                    });
+                    cell.addEventListener('mouseleave', hideTooltip);
+                }
+
+                cell.appendChild(loadIndicatorContainer);
+                container.appendChild(cell);
+            }
+        }
+
+        // 週間スケジュールの描画
+        function renderWeekCalendar(startOfWeek) {
+            const container = document.getElementById('calendar-grid-body');
+            container.className = "calendar-grid";
+            container.innerHTML = '';
+
+            // 曜日ヘッダー
+            const dayNames = ['月', '火', '水', '木', '金', '土', '日'];
+            dayNames.forEach((name, idx) => {
+                const header = document.createElement('div');
+                header.className = 'day-header';
+                if (idx === 5) header.classList.add('saturday');
+                if (idx === 6) header.classList.add('sunday');
+                
+                const d = new Date(startOfWeek);
+                d.setDate(startOfWeek.getDate() + idx);
+                header.innerHTML = `${name}<br><span style="font-size:0.75rem;font-weight:normal">${d.getMonth()+1}/${d.getDate()}</span>`;
+                container.appendChild(header);
+            });
+
+            // 1週間分 (7セル) 描画
+            for (let i = 0; i < 7; i++) {
+                const cellDate = new Date(startOfWeek);
+                cellDate.setDate(startOfWeek.getDate() + i);
+
+                const dateStr = formatDate(cellDate);
+                const cell = document.createElement('div');
+                cell.className = 'calendar-cell';
+                cell.style.minHeight = '350px'; // 週表示は縦幅を広げる
+
+                const dayOfWeek = cellDate.getDay();
+                if (dayOfWeek === 0) cell.classList.add('sunday');
+                if (dayOfWeek === 6) cell.classList.add('saturday');
+
+                let holidayName = '';
+                if (holidays[dateStr]) {
+                    cell.classList.add('holiday');
+                    holidayName = holidays[dateStr];
+                }
+
+                const cellHeader = document.createElement('div');
+                cellHeader.className = 'cell-header';
+                
+                const dayNum = document.createElement('span');
+                dayNum.className = 'day-number';
+                dayNum.innerText = cellDate.getDate();
+                cellHeader.appendChild(dayNum);
+
+                if (holidayName) {
+                    const holidaySpan = document.createElement('span');
+                    holidaySpan.className = 'holiday-label';
+                    holidaySpan.innerText = holidayName;
+                    cellHeader.appendChild(holidaySpan);
+                }
+                cell.appendChild(cellHeader);
+
+                // 予定リスト (詳細表示できるように縦に並べる)
+                const listContainer = document.createElement('div');
+                listContainer.className = 'event-list';
+                listContainer.style.maxHeight = '240px';
+                
+                const dailyEvents = rawSchedules.filter(sched => {
+                    if (parseInt(sched.is_deleted)) return false;
+                    if (sched.start_at) {
+                        const sDate = sched.start_at.substring(0, 10);
+                        if (sched.type === 'period' && sched.end_at) {
+                            const eDate = sched.end_at.substring(0, 10);
+                            return dateStr >= sDate && dateStr <= eDate;
+                        }
+                        return sDate === dateStr;
+                    }
+                    return false;
+                });
+
+                dailyEvents.forEach(event => {
+                    const evItem = document.createElement('div');
+                    evItem.className = `event-item event-${event.type}`;
+                    evItem.style.whiteSpace = 'normal'; // 週表示は折り返し許可
+                    
+                    let prefix = "";
+                    let suffix = "";
+                    if (event.type === 'task') {
+                        evItem.classList.add(event.status);
+                        prefix = `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
+                        suffix = ` <span style="opacity:0.6;font-size:0.65rem">(${event.weight}h)</span>`;
+                    }
+                    
+                    evItem.innerHTML = `${prefix}${escapeHtml(event.title)}${suffix}`;
+                    evItem.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        showEventDetail(event, cellDate);
+                    });
+                    listContainer.appendChild(evItem);
+                });
+                cell.appendChild(listContainer);
+
+                // 負荷詳細を一覧で表示
+                const dailyLoad = calculateDailyLoad(dateStr);
+                const loadContainer = document.createElement('div');
+                loadContainer.className = 'load-indicator-container';
+                loadContainer.style.flexDirection = 'column';
+                loadContainer.style.gap = '4px';
+
+                Object.keys(dailyLoad).forEach(slotId => {
+                    const load = dailyLoad[slotId];
+                    if (load.tasks.length > 0) {
+                        const isOver = load.current > load.limit;
+                        const ind = document.createElement('div');
+                        ind.className = 'load-indicator';
+                        ind.style.width = '100%';
+                        ind.style.display = 'flex';
+                        ind.style.justifyContent = 'space-between';
+                        
+                        if (isOver) {
+                            ind.classList.add('warning');
+                            ind.innerHTML = `<span>⚠ ${load.name}</span><span>${load.current} / ${load.limit}h</span>`;
+                        } else {
+                            ind.innerHTML = `<span>${load.name}</span><span>${load.current} / ${load.limit}h</span>`;
+                        }
+                        loadContainer.appendChild(ind);
+                    }
+                });
+                cell.appendChild(loadContainer);
+                container.appendChild(cell);
+            }
+        }
+
+        // ガントチャートの描画
+        function renderGanttChart() {
+            const container = document.getElementById('gantt-chart-body');
+            container.innerHTML = '';
+
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+
+            // 対象月の全日付を生成
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const timelineDays = [];
+            for (let d = 1; d <= daysInMonth; d++) {
+                timelineDays.push(new Date(year, month, d));
+            }
+
+            // ガントグリッド全体のコンテナ
+            const ganttGrid = document.createElement('div');
+            ganttGrid.className = 'gantt-grid';
+
+            // 左パネル: 予定タイトル一覧
+            const leftPanel = document.createElement('div');
+            leftPanel.className = 'gantt-left-panel';
+
+            const leftHeader = document.createElement('div');
+            leftHeader.className = 'gantt-row-header title-col';
+            leftHeader.innerText = '予定・タスク名';
+            leftPanel.appendChild(leftHeader);
+
+            // 右パネル: タイムライン
+            const rightPanel = document.createElement('div');
+            rightPanel.className = 'gantt-right-panel';
+
+            // タイムラインヘッダー
+            const timelineHeader = document.createElement('div');
+            timelineHeader.className = 'gantt-timeline-header';
+            
+            timelineDays.forEach(date => {
+                const hCell = document.createElement('div');
+                hCell.className = 'gantt-header-cell';
+                
+                const dateStr = formatDate(date);
+                const dayOfWeek = date.getDay();
+                if (dayOfWeek === 0) hCell.classList.add('sunday');
+                if (dayOfWeek === 6) hCell.classList.add('saturday');
+                if (holidays[dateStr]) hCell.classList.add('holiday');
+                
+                hCell.innerHTML = `<span>${date.getDate()}</span><span style="font-size:0.55rem;opacity:0.6">${['日','月','火','水','木','金','土'][dayOfWeek]}</span>`;
+                timelineHeader.appendChild(hCell);
+            });
+            rightPanel.appendChild(timelineHeader);
+
+            // 描画対象の予定データを抽出
+            // 当月にかぶる予定 (period または task/simple)
+            const firstDateStr = formatDate(timelineDays[0]);
+            const lastDateStr = formatDate(timelineDays[timelineDays.length - 1]);
+
+            const targetEvents = rawSchedules.filter(sched => {
+                if (parseInt(sched.is_deleted)) return false;
+                
+                if (sched.start_at) {
+                    const sDate = sched.start_at.substring(0, 10);
+                    const eDate = sched.end_at ? sched.end_at.substring(0, 10) : sDate;
+                    
+                    // 期間が当月の範囲にかぶっているか
+                    return sDate <= lastDateStr && eDate >= firstDateStr;
+                }
+                return false;
+            });
+
+            if (targetEvents.length === 0) {
+                // 予定がない場合の空表示
+                const emptyRowLeft = document.createElement('div');
+                emptyRowLeft.className = 'gantt-row-header';
+                emptyRowLeft.style.color = 'var(--text-secondary)';
+                emptyRowLeft.innerText = '表示する予定がありません';
+                leftPanel.appendChild(emptyRowLeft);
+
+                const emptyRowRight = document.createElement('div');
+                emptyRowRight.className = 'gantt-row-body';
+                rightPanel.appendChild(emptyRowRight);
+            }
+
+            // 各予定行の描画
+            targetEvents.forEach(event => {
+                // 左パネル追加
+                const rowHeader = document.createElement('div');
+                rowHeader.className = 'gantt-row-header';
+                rowHeader.innerText = event.title;
+                leftPanel.appendChild(rowHeader);
+
+                // 右パネルの行追加
+                const rowBody = document.createElement('div');
+                rowBody.className = 'gantt-row-body';
+
+                // 背景に日付のグリッド線を描画
+                timelineDays.forEach(date => {
+                    const bgGrid = document.createElement('div');
+                    bgGrid.style.width = '40px';
+                    bgGrid.style.height = '100%';
+                    bgGrid.style.borderRight = '1px solid rgba(255, 255, 255, 0.02)';
+                    bgGrid.style.flexShrink = '0';
+                    
+                    const dayOfWeek = date.getDay();
+                    if (dayOfWeek === 0 || dayOfWeek === 6 || holidays[formatDate(date)]) {
+                        bgGrid.style.background = 'rgba(255, 255, 255, 0.01)';
+                    }
+                    rowBody.appendChild(bgGrid);
+                });
+
+                // 予定のバーの配置計算
+                const startAtStr = event.start_at.substring(0, 10);
+                const endAtStr = event.end_at ? event.end_at.substring(0, 10) : startAtStr;
+
+                // 当月の開始日と終了日からのインデックス（オフセット）算出
+                const startOffset = Math.max(0, Math.ceil((new Date(startAtStr) - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                const endOffset = Math.min(timelineDays.length - 1, Math.floor((new Date(endAtStr) - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+
+                const durationDays = endOffset - startOffset + 1;
+
+                if (durationDays > 0) {
+                    const bar = document.createElement('div');
+                    bar.className = `gantt-bar ${event.type}`;
+                    if (event.type === 'task') {
+                        bar.classList.add(event.status);
+                    }
+                    
+                    // 配置用座標 (1セル = 40px)
+                    bar.style.left = `${startOffset * 40 + 8}px`;
+                    bar.style.width = `${durationDays * 40 - 16}px`;
+                    bar.innerText = event.title;
+
+                    bar.addEventListener('click', () => {
+                        showEventDetail(event, new Date(startAtStr));
+                    });
+
+                    rowBody.appendChild(bar);
+                }
+
+                rightPanel.appendChild(rowBody);
+            });
+
+            ganttGrid.appendChild(leftPanel);
+            ganttGrid.appendChild(rightPanel);
+            container.appendChild(ganttGrid);
+        }
+
+        // ツールチップ表示
+        function showTooltip(e, content) {
+            const tooltip = document.getElementById('cell-tooltip');
+            tooltip.innerHTML = content;
+            tooltip.style.display = 'block';
+            
+            // マウス位置に合わせて座標を調整
+            const x = e.clientX + 15;
+            const y = e.clientY + 15;
+            tooltip.style.left = `${x}px`;
+            tooltip.style.top = `${y}px`;
+        }
+
+        // ツールチップ非表示
+        function hideTooltip() {
+            document.getElementById('cell-tooltip').style.display = 'none';
+        }
+
+        // 予定クリック時の詳細ダイアログ表示 (簡易版)
+        function showEventDetail(event, date) {
+            alert(`【予定詳細】\n\nタイトル: ${event.title}\n種類: ${event.type}\n日付: ${event.start_at}\nステータス: ${event.status || 'なし'}\n重み: ${event.weight || 0}h\nカテゴリ: ${event.category || '一般'}\n詳細メモ: ${event.description || '(なし)'}`);
+        }
+
+        // 日付オブジェクトを YYYY-MM-DD 形式にフォーマットする
+        function formatDate(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        // HTMLエスケープ処理
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>
