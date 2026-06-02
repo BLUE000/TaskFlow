@@ -140,7 +140,7 @@ MySQL データベースへの予定データの保存（CRUD）を担当し、S
 
 
 ### 3.2. `SyncEngine` クラス (同期処理・衝突検知)
-同期処理の開始から完了までを制御するステートマシンクラスです。
+同期処理の開始から完了までを制御するクラスです。シグナル・スロットを使わず、指定されたレシーバ（UI側）へカスタムイベントをポストする構成とします。
 
 ```cpp
 // sync_engine.h
@@ -149,35 +149,92 @@ MySQL データベースへの予定データの保存（CRUD）を担当し、S
 
 #include <QObject>
 #include <QDateTime>
+#include <QEvent>
 #include "model/schedule.h"
 
-class SyncEngine : public QObject {
-    Q_OBJECT
+// カスタムイベントのタイプ定義
+enum TaskFlowEventType {
+    SyncProgressType = QEvent::User + 1,
+    SyncConflictType,
+    SyncFinishedType
+};
+
+// カスタムイベントクラス群
+class SyncProgressEvent : public QEvent {
 public:
-    explicit SyncEngine(QObject *parent = nullptr);
+    SyncProgressEvent(int percentage)
+        : QEvent(static_cast<QEvent::Type>(SyncProgressType)), m_percentage(percentage) {}
+    int percentage() const { return m_percentage; }
+private:
+    int m_percentage;
+};
+
+class SyncConflictEvent : public QEvent {
+public:
+    SyncConflictEvent(const Schedule& localSched, const Schedule& remoteSched)
+        : QEvent(static_cast<QEvent::Type>(SyncConflictType)), m_localSched(localSched), m_remoteSched(remoteSched) {}
+    Schedule localSchedule() const { return m_localSched; }
+    Schedule remoteSchedule() const { return m_remoteSched; }
+private:
+    Schedule m_localSched;
+    Schedule m_remoteSched;
+};
+
+class SyncFinishedEvent : public QEvent {
+public:
+    SyncFinishedEvent(bool success, const QString& message)
+        : QEvent(static_cast<QEvent::Type>(SyncFinishedType)), m_success(success), m_message(message) {}
+    bool success() const { return m_success; }
+    QString message() const { return m_message; }
+private:
+    bool m_success;
+    QString m_message;
+};
+
+class SyncEngine {
+public:
+    // レシーバオブジェクト(UIスレッドのMainWindow等)を登録して非同期通知に利用する
+    explicit SyncEngine(QObject *receiver = nullptr);
+    void setReceiver(QObject *receiver);
 
     // 同期処理を非同期で開始する
     void startSync();
 
-signals:
-    // 同期進捗率の更新通知
-    void progressUpdated(int percentage);
-    // 競合（衝突）を検知したため、UI側に解決の入力を求めるシグナル
-    void conflictDetected(const Schedule& localSched, const Schedule& remoteSched);
-    // 同期完了通知
-    void syncFinished(bool success, const QString& message);
+    // 競合解決結果を受け取って同期処理を再開する
+    void resolveConflict(const Schedule& resolvedSched);
 
 private:
     // 同期手順
     void pullRemoteChanges();
     void pushLocalChanges();
-    void resolveConflict(const Schedule& resolvedSched);
 
+    QObject *m_receiver;
     QDateTime m_lastSyncedAt;
     QList<Schedule> m_conflictedSchedules;
 };
 
 #endif // SYNC_ENGINE_H
+```
+
+#### UI側 (MainWindow) のカスタムイベントハンドリング
+UIクラスは下位モジュールからポストされたカスタムイベントを `customEvent` をオーバーライドして受信します。
+
+```cpp
+// mainwindow.cpp 内の実装例
+void MainWindow::customEvent(QEvent *event) {
+    if (event->type() == static_cast<QEvent::Type>(SyncProgressType)) {
+        auto *progressEvent = static_cast<SyncProgressEvent*>(event);
+        ui->progressBar->setValue(progressEvent->percentage());
+    } else if (event->type() == static_cast<QEvent::Type>(SyncConflictType)) {
+        auto *conflictEvent = static_cast<SyncConflictEvent*>(event);
+        // 競合解決ダイアログを表示（モーダル表示して解決データを待つ）
+        showConflictDialog(conflictEvent->localSchedule(), conflictEvent->remoteSchedule());
+    } else if (event->type() == static_cast<QEvent::Type>(SyncFinishedType)) {
+        auto *finishedEvent = static_cast<SyncFinishedEvent*>(event);
+        handleSyncFinished(finishedEvent->success(), finishedEvent->message());
+    }
+    QMainWindow::customEvent(event);
+}
 ```
 
 #### 同期時のデータ競合（衝突）検出クエリの流れ

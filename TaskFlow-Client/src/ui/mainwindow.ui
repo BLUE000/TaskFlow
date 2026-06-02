@@ -1,0 +1,473 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>980</width>
+    <height>680</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>TaskFlow Administrator Console</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QTabWidget" name="tabWidget">
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <!-- タブ1: 予定管理 -->
+      <widget class="QWidget" name="tabSchedules">
+       <attribute name="title">
+        <string>Schedules</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayoutSched">
+        <item>
+         <!-- 左側: 一覧テーブル -->
+         <layout class="QVBoxLayout" name="verticalLayoutTable">
+          <item>
+           <widget class="QLabel" name="lblSchedList">
+            <property name="text">
+             <string>Schedule &amp; Task List</string>
+            </property>
+            <property name="font">
+             <font>
+              <bold>true</bold>
+             </font>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="tableSchedules">
+            <property name="selectionBehavior">
+             <enum>QAbstractItemView::SelectRows</enum>
+            </property>
+            <property name="selectionMode">
+             <enum>QAbstractItemView::SingleSelection</enum>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <!-- 右側: 編集パネル -->
+         <widget class="QGroupBox" name="groupEditSched">
+          <property name="title">
+           <string>Schedule Details</string>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>380</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>420</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <layout class="QFormLayout" name="formLayoutSched">
+           <item row="0" column="0">
+            <widget class="QLabel" name="lblT">
+             <property name="text">
+              <string>Title:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="txtTitle"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="lblD">
+             <property name="text">
+              <string>Description:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QTextEdit" name="txtDescription">
+             <property name="maximumHeight">
+              <number>80</number>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="lblTy">
+             <property name="text">
+              <string>Type:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QComboBox" name="cmbType"/>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="lblS">
+             <property name="text">
+              <string>Start At:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QDateTimeEdit" name="dtStart">
+             <property name="calendarPopup">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="lblE">
+             <property name="text">
+              <string>End At:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QDateTimeEdit" name="dtEnd">
+             <property name="calendarPopup">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="0">
+            <widget class="QLabel" name="lblW">
+             <property name="text">
+              <string>Weight:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="1">
+            <widget class="QDoubleSpinBox" name="spinWeight"/>
+           </item>
+           <item row="6" column="0">
+            <widget class="QLabel" name="lblTs">
+             <property name="text">
+              <string>Time Slot:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="1">
+            <widget class="QComboBox" name="cmbTimeSlot"/>
+           </item>
+           <item row="7" column="0">
+            <widget class="QLabel" name="lblP">
+             <property name="text">
+              <string>Options:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="7" column="1">
+            <widget class="QCheckBox" name="chkIsPublic">
+             <property name="text">
+              <string>Publish publicly</string>
+             </property>
+            </widget>
+           </item>
+           <item row="8" column="1">
+            <widget class="QLabel" name="lblLoadWarning">
+             <property name="text">
+              <string/>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="9" column="0" colspan="2">
+            <layout class="QGridLayout" name="gridLayoutButtons">
+             <item row="0" column="0">
+              <widget class="QPushButton" name="btnAddSchedule">
+               <property name="text">
+                <string>Add New</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QPushButton" name="btnSaveSchedule">
+               <property name="text">
+                <string>Save Changes</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QPushButton" name="btnDeleteSchedule">
+               <property name="text">
+                <string>Delete</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QPushButton" name="btnClearScheduleForm">
+               <property name="text">
+                <string>Clear Form</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <!-- タブ2: 時間枠・Webhook設定 -->
+      <widget class="QWidget" name="tabConfig">
+       <attribute name="title">
+        <string>Time Slots &amp; Webhooks</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayoutConfig">
+        <item>
+         <widget class="QGroupBox" name="groupTimeSlots">
+          <property name="title">
+           <string>Time Slot Definitions</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayoutTS">
+           <item>
+            <widget class="QListWidget" name="listTimeSlots"/>
+           </item>
+           <item>
+            <layout class="QFormLayout" name="formLayoutTS">
+             <item row="0" column="0">
+              <widget class="QLabel" name="label_a">
+               <property name="text">
+                <string>Name:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QLineEdit" name="txtSlotName"/>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="label_b">
+               <property name="text">
+                <string>Start Time:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QTimeEdit" name="timeSlotStart"/>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="label_c">
+               <property name="text">
+                <string>End Time:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QTimeEdit" name="timeSlotEnd"/>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="label_d">
+               <property name="text">
+                <string>Limit Hours:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="spinSlotLimit"/>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayoutTSBtns">
+             <item>
+              <widget class="QPushButton" name="btnAddTimeSlot">
+               <property name="text">
+                <string>Save Time Slot</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnDeleteTimeSlot">
+               <property name="text">
+                <string>Delete Selected</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupWebhooks">
+          <property name="title">
+           <string>Discord Webhook Notification Settings</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayoutWH">
+           <item>
+            <widget class="QListWidget" name="listWebhooks"/>
+           </item>
+           <item>
+            <layout class="QFormLayout" name="formLayoutWH">
+             <item row="0" column="0">
+              <widget class="QLabel" name="label_e">
+               <property name="text">
+                <string>Name:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QLineEdit" name="txtWebhookName"/>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="label_f">
+               <property name="text">
+                <string>Webhook URL:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QLineEdit" name="txtWebhookUrl"/>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayoutWHBtns">
+             <item>
+              <widget class="QPushButton" name="btnAddWebhook">
+               <property name="text">
+                <string>Save Webhook</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnDeleteWebhook">
+               <property name="text">
+                <string>Delete Selected</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <!-- タブ3: 同期・API設定 -->
+      <widget class="QWidget" name="tabSettings">
+       <attribute name="title">
+        <string>Settings &amp; Synchronization</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutSettings">
+        <item>
+         <widget class="QGroupBox" name="groupApiSettings">
+          <property name="title">
+           <string>API Connection Configuration</string>
+          </property>
+          <layout class="QFormLayout" name="formLayoutApi">
+           <item row="0" column="0">
+            <widget class="QLabel" name="label_g">
+             <property name="text">
+              <string>Sync API URL:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="txtApiUrl"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="label_h">
+             <property name="text">
+              <string>API Auth Token:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="txtApiToken"/>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="label_i">
+             <property name="text">
+              <string>TransCipher Secret Key:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QLineEdit" name="txtSecretKey"/>
+           </item>
+           <item row="3" column="1">
+            <widget class="QPushButton" name="btnSaveSettings">
+             <property name="text">
+              <string>Save Configurations</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupSyncPanel">
+          <property name="title">
+           <string>Synchronization Status</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayoutSyncPanel">
+           <item>
+            <widget class="QPushButton" name="btnSyncNow">
+             <property name="text">
+              <string>Synchronize Now with Server</string>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>40</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <bold>true</bold>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QProgressBar" name="progressBar">
+             <property name="value">
+              <number>0</number>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblSyncStatus">
+             <property name="text">
+              <string>Idle.</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

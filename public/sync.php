@@ -41,9 +41,9 @@ if (json_last_error() !== JSON_ERROR_NONE) {
     exit;
 }
 
-// API トークン認証の検証
+// API トークン認証の検証 (NULL/空トークン汚染防止)
 $clientToken = $requestData['token'] ?? '';
-if (empty($clientToken) || $clientToken !== TRANSCIPHER_API_TOKEN) {
+if (empty($clientToken) || empty(TRANSCIPHER_API_TOKEN) || $clientToken !== TRANSCIPHER_API_TOKEN) {
     header('HTTP/1.1 401 Unauthorized');
     echo json_encode(['error' => 'Unauthorized. Invalid API token.']);
     exit;

@@ -7,12 +7,19 @@
 QString CryptoUtil::m_secretKey = "";
 
 void CryptoUtil::init(const QString& secretKey) {
+    if (secretKey.contains(QChar('\0'))) {
+        throw std::invalid_argument("Secret key contains null bytes.");
+    }
     m_secretKey = secretKey;
 }
 
 QString CryptoUtil::encrypt(const QString& plainText) {
     if (plainText.isEmpty()) {
         return "";
+    }
+
+    if (plainText.contains(QChar('\0'))) {
+        throw std::invalid_argument("Plain text contains null bytes.");
     }
 
     if (m_secretKey.isEmpty()) {
@@ -32,6 +39,10 @@ QString CryptoUtil::encrypt(const QString& plainText) {
 QString CryptoUtil::decrypt(const QString& cipherTextBase64) {
     if (cipherTextBase64.isEmpty()) {
         return "";
+    }
+
+    if (cipherTextBase64.contains(QChar('\0'))) {
+        throw std::invalid_argument("Cipher text contains null bytes.");
     }
 
     if (m_secretKey.isEmpty()) {
