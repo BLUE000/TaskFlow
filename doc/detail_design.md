@@ -355,3 +355,41 @@ graph TD
     * `weight == 0.0 && start_at != NULL` ➔ `type = 'period'`
     * `weight > 0.0` ➔ `type = 'task'`
     として判定し、`type` カラムに代入してDBへ保存します。
+
+---
+
+## 5. CMake ビルド環境非依存設計 (CMakeLists.txt)
+
+C++（Qt 6）デスクトップアプリのビルド定義において、開発者個人の特定PC環境に依存する絶対パス情報（Qtのインストール先やTransCipherのローカル配置ディレクトリなど）の混入を防ぐため、以下のルールで `CMakeLists.txt` を設計します。
+
+### 5.1. Qt 6 パッケージの探索
+特定のローカルパス（例: `C:/Qt/...`）を `CMakeLists.txt` 内に記述することを厳禁とします。
+* **標準的な探索手法の採用**:
+  `find_package` を用いてモジュールを検索します。
+  ```cmake
+  find_package(Qt6 COMPONENTS Core Widgets Sql REQUIRED)
+  ```
+* **環境情報の外部定義**:
+  Qtのインストールパスは、ビルドツール（Qt Creator や CLI）の起動オプション（`-DCMAKE_PREFIX_PATH`）または環境変数（`CMAKE_PREFIX_PATH`）から外部注入し、CMake自体はそれに追従する設計とします。
+
+### 5.2. サードパーティ（TransCipher）の探索と配置
+開発用リポジトリに依存したパス指定を行わず、プロジェクトディレクトリ内部の相対パス（`${CMAKE_CURRENT_SOURCE_DIR}`）で統一します。
+
+* **インクルードパス・リンクライブラリの設定**:
+  ```cmake
+  # プロジェクト内の相対パスでインクルードとライブラリを指定
+  target_include_directories(TaskFlow-Client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_directories(TaskFlow-Client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/transcipher)
+  target_link_libraries(TaskFlow-Client PRIVATE TransCipher)
+  ```
+* **DLLの自動配置（ビルド後コピー）**:
+  ビルド後のバイナリ実行時に DLL が見つからないエラーを防ぐため、PCごとの手動コピーに頼らず、CMake 内でターゲットの出力ディレクトリ（`${CMAKE_BINARY_DIR}` 等）へ `TransCipher.dll` を自動コピーするビルド後カスタムコマンドを定義します。
+  ```cmake
+  if(WIN32)
+      add_custom_command(TARGET TaskFlow-Client POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/transcipher/TransCipher.dll"
+          $<TARGET_FILE_DIR:TaskFlow-Client>
+      )
+  endif()
+  ```
