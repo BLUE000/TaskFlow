@@ -67,3 +67,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Custom Rules
+WIP_STATE.md
+.gitignore.bak
