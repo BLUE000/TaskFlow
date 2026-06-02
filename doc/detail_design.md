@@ -82,128 +82,35 @@ TaskFlow-Client/
 ## 2. PHP (Web側) クラス・メソッド詳細設計
 
 ### 2.1. `CryptoUtil` クラス
-`TransCipher` への依存を隠蔽し、Base64 文字列のやり取りを行います。
+`TransCipher` への依存を隠蔽し、Base64 文字列の相互変換と接続パラメータ管理を担当します。
 
-```php
-namespace App\Common\Security;
-
-use TransCipher\CipherEngine;
-use TransCipher\RecipeManager;
-
-class CryptoUtil {
-    private static string $secretKey = "";
-
-    // 接続設定と秘密鍵の初期化
-    public static function init(string $secretKey, string $apiUrl, string $apiToken): void {
-        self::$secretKey = $secretKey;
-        CipherEngine::configure($apiUrl, $apiToken);
-    }
-
-    // 文字列を暗号化し、Base64形式で返却する。エラー時は RuntimeException をスロー
-    public static function encrypt(string $plainText): string {
-        if (empty($plainText)) return "";
-        $cipherBinary = CipherEngine::encrypt($plainText, self::$secretKey, RecipeManager::MODE_MANDATORY, "2.0");
-        if ($cipherBinary === null) {
-            throw new \RuntimeException("TransCipher encryption failed. Check API configuration or network.");
-        }
-        return base64_encode($cipherBinary);
-    }
-
-    // Base64暗号化文字列を復号し、平文で返却する。エラー時は RuntimeException をスロー
-    public static function decrypt(string $cipherTextBase64): string {
-        if (empty($cipherTextBase64)) return "";
-        $binary = base64_decode($cipherTextBase64, true);
-        if ($binary === false) {
-            throw new \InvalidArgumentException("Invalid Base64 format.");
-        }
-        $plainText = CipherEngine::decrypt($binary, self::$secretKey);
-        if ($plainText === null) {
-            throw new \RuntimeException("TransCipher decryption failed. Invalid Key or API failure.");
-        }
-        return $plainText;
-    }
-}
-```
+* **`init($secretKey, $apiUrl, $apiToken)`**:
+  * 秘密鍵（`$secretKey`）を静的メンバーに保持し、`TransCipher\CipherEngine::configure` を呼び出してAPI接続先と認証トークンを設定します。
+* **`encrypt($plainText)`**:
+  1. 引数の平文テキストが空の場合は、空文字を返却します。
+  2. `CipherEngine::encrypt` を呼び出し、平文、秘密鍵、および強制AES適用モード（MANDATORY）、暗号バージョン "2.0" を指定して暗号化されたバイナリデータを取得します。
+  3. API疎通エラーや無効なパラメータ等で戻り値が `null` となった場合、処理を中断して `RuntimeException` をスローします。
+  4. 正常に取得されたバイナリデータを Base64 エンコードした文字列に変換して返却します。
+* **`decrypt($cipherTextBase64)`**:
+  1. 引数のBase64暗号文字列が空の場合は、空文字を返却します。
+  2. `base64_decode` を実行して暗号バイナリデータに変換します。変換に失敗（不正なBase64文字など）した場合は `InvalidArgumentException` をスローします。
+  3. `CipherEngine::decrypt` を呼び出し、暗号バイナリデータと秘密鍵を渡して平文データを取得します。
+  4. API接続エラーや鍵の不一致等で戻り値が `null` となった場合、処理を中断して `RuntimeException` をスローします。
+  5. 復号された平文テキストを返却します。
 
 ### 2.2. `ScheduleRepository` クラス
-データベースへの保存直前に `CryptoUtil::encrypt` を実行し、データ取得後に `CryptoUtil::decrypt` を行います。
+MySQL データベースへの予定データの保存（CRUD）を担当し、SQLの発行と暗号化・復号のタイミングを制御します。
 
-```php
-namespace App\Repository;
+* **`save($schedule)`**:
+  1. 保存対象データ（`$schedule`）の `title`（予定タイトル）を `CryptoUtil::encrypt` を用いて暗号化します。
+  2. `description`（予定詳細）が存在し空でない場合は `CryptoUtil::encrypt` を用いて暗号化します（空の場合は `NULL` 値を代入）。
+  3. データベース（MySQL）に対して、重複キー時に上書きを行うための `INSERT INTO ... ON DUPLICATE KEY UPDATE` クエリをプレペアし、UUIDやその他の非暗号化カラム（期間、優先度、重み等）とともに暗号化タイトル・詳細の値を安全にバインドして実行します。
+  4. クエリ実行の成否（成功時は `true`、失敗時は `false`）を返却します。
+* **`findAllPublic()`**:
+  1. データベース（MySQL）に対して、公開予定かつ未削除のレコード（`is_public = 1 AND is_deleted = 0`）を日付（`start_at`）昇順で取得する `SELECT` クエリを実行します。
+  2. 取得したレコードセットをループ処理し、各レコードの `title` を `CryptoUtil::decrypt` で平文に復号します。また、`description` も存在する場合は同様に復号します。
+  3. タイトルと詳細が平文に復元された予定レコードの配列を返却します。
 
-use PDO;
-use App\Common\Security\CryptoUtil;
-
-class ScheduleRepository {
-    private PDO $pdo;
-
-    public function __construct(PDO $pdo) {
-        $this->pdo = $pdo;
-    }
-
-    // 予定の保存 (新規・更新共通)
-    public function save(array $schedule): bool {
-        // 保存直前に暗号化を適用
-        $encryptedTitle = CryptoUtil::encrypt($schedule['title']);
-        $encryptedDesc = !empty($schedule['description']) ? CryptoUtil::encrypt($schedule['description']) : null;
-
-        $sql = "INSERT INTO schedules (
-                    id, title, description, type, start_at, end_at, status, priority, 
-                    weight, time_slot_id, category, is_public, discord_webhook_id, updated_at, is_deleted
-                ) VALUES (
-                    :id, :title, :description, :type, :start_at, :end_at, :status, :priority, 
-                    :weight, :time_slot_id, :category, :is_public, :discord_webhook_id, NOW(), :is_deleted
-                ) ON DUPLICATE KEY UPDATE
-                    title = :title,
-                    description = :description,
-                    type = :type,
-                    start_at = :start_at,
-                    end_at = :end_at,
-                    status = :status,
-                    priority = :priority,
-                    weight = :weight,
-                    time_slot_id = :time_slot_id,
-                    category = :category,
-                    is_public = :is_public,
-                    discord_webhook_id = :discord_webhook_id,
-                    updated_at = NOW(),
-                    is_deleted = :is_deleted";
-
-        $stmt = $this->pdo->prepare($sql);
-        return $stmt->execute([
-            ':id' => $schedule['id'],
-            ':title' => $encryptedTitle,
-            ':description' => $encryptedDesc,
-            ':type' => $schedule['type'],
-            ':start_at' => $schedule['start_at'] ?? null,
-            ':end_at' => $schedule['end_at'] ?? null,
-            ':status' => $schedule['status'] ?? 'todo',
-            ':priority' => $schedule['priority'] ?? 0,
-            ':weight' => $schedule['weight'] ?? 0.0,
-            ':time_slot_id' => $schedule['time_slot_id'] ?? null,
-            ':category' => $schedule['category'] ?? 'general',
-            ':is_public' => $schedule['is_public'] ?? 0,
-            ':discord_webhook_id' => $schedule['discord_webhook_id'] ?? null,
-            ':is_deleted' => $schedule['is_deleted'] ?? 0
-        ]);
-    }
-
-    // 一般閲覧者向け（公開かつ未削除）の全取得。取得後にタイトル/詳細を復号
-    public function findAllPublic(): array {
-        $sql = "SELECT * FROM schedules WHERE is_public = 1 AND is_deleted = 0 ORDER BY start_at ASC";
-        $stmt = $this->pdo->query($sql);
-        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($results as &$row) {
-            $row['title'] = CryptoUtil::decrypt($row['title']);
-            if (!empty($row['description'])) {
-                $row['description'] = CryptoUtil::decrypt($row['description']);
-            }
-        }
-        return $results;
-    }
-}
-```
 
 ---
 
@@ -212,52 +119,21 @@ class ScheduleRepository {
 ### 3.1. `CryptoUtil` クラス (C++)
 `QByteArray` と `QString` のエンコード処理および `TransCipher` CLI/DLL 連携を仲介します。
 
-```cpp
-// crypto_util.h
-#ifndef CRYPTO_UTIL_H
-#define CRYPTO_UTIL_H
+* **`init(secretKey)`**:
+  * 秘密鍵（`m_secretKey`）を静的メンバーに保持します。
+* **`encrypt(plainText)`**:
+  1. 秘密鍵または引数の平文が空の場合は、空文字を返却します。
+  2. 平文（`QString`）を UTF-8 エンコードしたバイト配列（`QByteArray`）へ変換します。
+  3. `CipherEngine::encrypt` を呼び出し、バイト配列、秘密鍵、および強制AES適用モード（`AesMode::Mandatory`）を指定して暗号化結果（`CipherResult`）を取得します。
+  4. 処理が成功（`isSuccess()`）した場合、取得したバイナリデータを Base64 エンコードし、`QString` に変換して返却します。
+  5. 処理が失敗した場合は、エラーメッセージを取得して `std::runtime_error` をスローします。
+* **`decrypt(cipherTextBase64)`**:
+  1. 秘密鍵または引数のBase64暗号文字列が空の場合は、空文字を返却します。
+  2. Base64暗号文字列をデコードし、暗号バイナリ（`QByteArray`）に変換します。
+  3. `CipherEngine::decrypt` を呼び出し、暗号バイナリと秘密鍵を渡して復号結果（`CipherResult`）を取得します。
+  4. 処理が成功した場合、復元されたバイナリデータを UTF-8 から `QString` へデコードして返却します。
+  5. 処理が失敗した場合は、エラーメッセージを取得して `std::runtime_error` をスローします。
 
-#include <QString>
-#include "cipher_engine.h"
-
-class CryptoUtil {
-public:
-    static void init(const QString& secretKey) {
-        m_secretKey = secretKey;
-    }
-
-    static QString encrypt(const QString& plainText) {
-        if (m_secretKey.isEmpty() || plainText.isEmpty()) return "";
-        QByteArray plainBytes = plainText.toUtf8();
-        
-        // TransCipher 呼び出し
-        CipherResult result = CipherEngine::encrypt(plainBytes, m_secretKey, AesMode::Mandatory);
-        if (result.isSuccess()) {
-            return QString::fromLatin1(result.data().toBase64());
-        } else {
-            throw std::runtime_error(result.message().toStdString());
-        }
-    }
-
-    static QString decrypt(const QString& cipherTextBase64) {
-        if (m_secretKey.isEmpty() || cipherTextBase64.isEmpty()) return "";
-        QByteArray cipherBytes = QByteArray::fromBase64(cipherTextBase64.toLatin1());
-        
-        // TransCipher 呼び出し
-        CipherResult result = CipherEngine::decrypt(cipherBytes, m_secretKey);
-        if (result.isSuccess()) {
-            return QString::fromUtf8(result.data());
-        } else {
-            throw std::runtime_error(result.message().toStdString());
-        }
-    }
-
-private:
-    inline static QString m_secretKey = "";
-};
-
-#endif // CRYPTO_UTIL_H
-```
 
 ### 3.2. `SyncEngine` クラス (同期処理・衝突検知)
 同期処理の開始から完了までを制御するステートマシンクラスです。
