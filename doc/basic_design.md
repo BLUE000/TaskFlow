@@ -150,10 +150,46 @@ C++アプリがオンラインになり同期をトリガー（起動時また�
 * `schedules.description` (予定詳細)
 * `webhooks.url` (Discord Webhook URL)
 
-### 5.2. 暗号化・復号プロセス
-* **データベースへの保存**: アプリケーション（C++ / PHP）はDBにデータを挿入または更新する前に、`TransCipher` ライブラリの暗号化関数を実行してデータを難読化します。
-* **画面への表示**: アプリケーションはDBからデータを取得後、画面に表示する直前に復号関数を呼び出して元のテキストに戻します。
-* **メリット**: MySQL や SQLite ファイルを物理的に覗き見ても、予定タイトルやWebhookのトークンが暗号化されているため安全です。
+### 5.2. 暗号化・復号用共通インターフェース設計
+アプリケーションコードが `TransCipher` の内部仕様（バージョンごとのヘッダーサイズの差分など）に依存しないよう、またDB保存時のテキスト処理を共通化するために、暗号化・復号処理をラップする **`CryptoUtil`** インターフェースを定義します。
+
+* **データの永続化形式**: `TransCipher` の出力はバイナリ形式（Version 2 は 64バイトのヘッダーを含みます。以前のVersion 1のヘッダー仕様等との差分があります）です。データベースの `TEXT` カラムに安全に保存するため、暗号化後のバイナリデータを **Base64エンコード** した文字列として格納します。復号時はBase64デコードしてから復号関数へ渡します。
+* **メリット**: アプリケーションロジックはヘッダーサイズやバイナリ変換を意識することなく、透過的に「文字列の暗号化・復号」を行えます。また、将来的な `TransCipher` のバージョンアップ時もこのラッパー層の修正のみで対応可能です。
+
+#### C++ 側呼び出し I/F (`CryptoUtil` クラス)
+`Qt 6` 環境で、`QString` と `QByteArray` の変換および `TransCipher` の呼び出しを抽象化します。
+
+```cpp
+class CryptoUtil {
+public:
+    // 秘密鍵を設定して初期化
+    static void init(const QString& secretKey);
+
+    // テキストを暗号化してBase64文字列で返す
+    static QString encrypt(const QString& plainText);
+
+    // Base64暗号化文字列を復号して平文テキストで返す
+    static QString decrypt(const QString& cipherTextBase64);
+};
+```
+※ 内部実装では `CipherEngine::encrypt(data, key, AesMode::Mandatory)` と `CipherEngine::decrypt(data, key)` を呼び出し、結果オブジェクト（`CipherResult`）を適切にハンドリングします。
+
+#### PHP 側呼び出し I/F (`CryptoUtil` クラス)
+PHP環境において、APIサーバー接続設定と `TransCipher` 呼び出しを抽象化します。
+
+```php
+class CryptoUtil {
+    // 秘密鍵とAPI接続用の初期設定
+    public static function init(string $secretKey, string $apiToken = null, string $apiUrl = null): void;
+
+    // テキストを暗号化してBase64文字列で返す
+    public static function encrypt(string $plainText): ?string;
+
+    // Base64暗号化文字列を復号して平文テキストで返す
+    public static function decrypt(string $cipherTextBase64): ?string;
+}
+```
+※ 内部実装では `CipherEngine::configure` による接続情報設定と、`CipherEngine::encrypt($data, $key, RecipeManager::MODE_MANDATORY, "2.0")` の呼び出しを行います。
 
 ---
 
