@@ -223,6 +223,54 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             } else {
                 $error = "祝日CSVファイルの保存に失敗しました。";
             }
+        } elseif ($form_action === 'change_password') {
+            // パスワード変更
+            $current_pw = $_POST['current_password'] ?? '';
+            $new_pw = $_POST['new_password'] ?? '';
+            $confirm_pw = $_POST['confirm_password'] ?? '';
+
+            if (empty($current_pw) || empty($new_pw) || empty($confirm_pw)) {
+                throw new InvalidArgumentException("すべてのフィールドを入力してください。");
+            }
+
+            if (!password_verify($current_pw, ADMIN_PASSWORD_HASH)) {
+                throw new InvalidArgumentException("現在のパスワードが正しくありません。");
+            }
+
+            if ($new_pw !== $confirm_pw) {
+                throw new InvalidArgumentException("新しいパスワードと確認用パスワードが一致しません。");
+            }
+
+            if (strlen($new_pw) < 6) {
+                throw new InvalidArgumentException("新しいパスワードは6文字以上で設定してください。");
+            }
+
+            // config/config.php を読み込んで、ADMIN_PASSWORD_HASH 定数を安全に変更
+            $configPath = __DIR__ . '/../config/config.php';
+            $content = file_get_contents($configPath);
+            if ($content === false) {
+                throw new RuntimeException("設定ファイルの読み込みに失敗しました。");
+            }
+
+            $newHash = password_hash($new_pw, PASSWORD_BCRYPT);
+            
+            // 安全な固定文字列置換（定数定義の行を特定して書き換え）
+            $oldLine = "define('ADMIN_PASSWORD_HASH', '" . ADMIN_PASSWORD_HASH . "');";
+            $newLine = "define('ADMIN_PASSWORD_HASH', '" . $newHash . "');";
+            $newContent = str_replace($oldLine, $newLine, $content);
+
+            // 一時ファイルに保存後、rename を使ってアトミックに書き換え
+            $tempFile = $configPath . '.tmp';
+            if (file_put_contents($tempFile, $newContent) === false) {
+                throw new RuntimeException("一時設定ファイルの保存に失敗しました。");
+            }
+
+            if (!rename($tempFile, $configPath)) {
+                @unlink($tempFile);
+                throw new RuntimeException("設定ファイルの更新に失敗しました。");
+            }
+
+            $message = "管理者パスワードを正常に変更しました。";
         }
     } catch (\Exception $e) {
         $error = "エラーが発生しました: " . $e->getMessage();
@@ -572,6 +620,7 @@ function h(string $str): string {
                     <a class="menu-item" onclick="showSection(this, 'section-timeslots')">時間枠設定</a>
                     <a class="menu-item" onclick="showSection(this, 'section-webhooks')">Discord Webhook設定</a>
                     <a class="menu-item" onclick="showSection(this, 'section-holiday')">祝日データ更新</a>
+                    <a class="menu-item" onclick="showSection(this, 'section-password')">パスワード変更</a>
                 </nav>
 
                 <!-- 右メインパネル -->
@@ -949,6 +998,36 @@ function h(string $str): string {
                         </form>
                     </section>
 
+                    <!-- セクション 6: パスワード変更 -->
+                    <section id="section-password" class="panel-section">
+                        <div class="section-title">管理者パスワードの変更</div>
+                        
+                        <form method="POST" action="admin.php" style="background:rgba(0,0,0,0.15); padding:1.5rem; border-radius:12px; max-width: 500px; margin-bottom:2rem;">
+                            <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                            <input type="hidden" name="form_action" value="change_password">
+                            
+                            <div class="form-group" style="margin-bottom:1.25rem;">
+                                <label for="current-password">現在のパスワード *</label>
+                                <input type="password" id="current-password" name="current_password" required>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom:1.25rem;">
+                                <label for="new-password">新しいパスワード * (6文字以上)</label>
+                                <input type="password" id="new-password" name="new_password" required minlength="6">
+                            </div>
+
+                            <div class="form-group" style="margin-bottom:1.5rem;">
+                                <label for="confirm-password">新しいパスワードの確認 *</label>
+                                <input type="password" id="confirm-password" name="confirm_password" required minlength="6">
+                            </div>
+
+                            <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+                                <button type="button" class="btn btn-secondary" onclick="clearPasswordForm()">クリア</button>
+                                <button type="submit" class="btn">パスワードを変更する</button>
+                            </div>
+                        </form>
+                    </section>
+
                 </main>
             </div>
         <?php endif; ?>
@@ -1061,6 +1140,12 @@ function h(string $str): string {
             document.getElementById('wh-id').value = '';
             document.getElementById('wh-name').value = '';
             document.getElementById('wh-url').value = '';
+        }
+
+        function clearPasswordForm() {
+            document.getElementById('current-password').value = '';
+            document.getElementById('new-password').value = '';
+            document.getElementById('confirm-password').value = '';
         }
     </script>
 </body>
