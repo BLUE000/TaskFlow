@@ -755,10 +755,7 @@ function h(string $str): string {
 <body>
     <div class="app-container">
         <header>
-            <div class="logo-area">
-                <h1 id="app-logo">TaskFlow</h1>
-                <p>ハイブリッド スケジュール ＆ 負荷分析ダッシュボード</p>
-            </div>
+            <div></div> <!-- レイアウト維持用の空ブロック -->
             <div style="display:flex; align-items:center; gap:1rem; flex-wrap: wrap;">
                 <?php if ($isAdmin): ?>
                     <a href="admin.php" class="tab-btn" style="color:var(--accent-purple); border:1px solid rgba(168,85,247,0.3); text-decoration:none; display:flex; align-items:center; gap:0.25rem;">
@@ -832,6 +829,12 @@ function h(string $str): string {
                 </div>
             </div>
         </main>
+        
+        <!-- コピーライトフッター -->
+        <footer style="text-align: center; margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--panel-border); color: var(--text-secondary); font-size: 0.8rem;">
+            <p style="margin-bottom: 0.5rem;">&copy; 2026 TaskFlow Project. All rights reserved.</p>
+            <p style="opacity: 0.7;">Powered by PHP 8.1, MySQL &amp; SQLite 3. Securely protected by TransCipher. Desktop client built with Qt 6.</p>
+        </footer>
     </div>
 
     <!-- ホバー詳細情報表示用のツールチップ -->
