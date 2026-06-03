@@ -119,10 +119,11 @@ MySQL データベースへの予定データの保存（CRUD）を担当し、S
 * **ログイン・ログアウト処理**:
   * 一般画面でログインPOSTリクエスト（パラメータ: `form_action = index_login`, `password`）を検知した際、`admin.php` と同様に `password_verify` で管理者パスワードハッシュと比較検証します。認証成功時は、セッションIDを再生成した上で `$_SESSION['admin_logged_in'] = true` をセットし、`index.php` へリダイレクトして非公開データを含む全件をロードします。
   * `index.php?action=logout` アクセス時は、セッションをクリアした上で `index.php` へリダイレクトし、ログイン状態を解除します。
-* **カテゴリのGETパラメータ連動（JavaScript側）**:
+* **カテゴリのGETパラメータ連動および表示トグル（JavaScript側）**:
   * 画面起動時に `URLSearchParams` を用いて `categories` パラメータを抽出し、カンマ区切りで複数のカテゴリを取得。それを `selectedCategories` セットに初期登録します。
   * `initCategoryFilters` 実行時に、該当するカテゴリバッジ（チップ）に `.active` クラスを自動付与して初期レンダリングを行います。
   * カテゴリバッジがクリックされた際、`selectedCategories` セットを更新したのち、`history.replaceState` を用いて、ブラウザのURLパラメータを `?categories=cat1,cat2` のようにリアルタイムに上書きします（ページのリロードは行いません）。
+  * **表示トグル機能**: ラベル部分のクリックイベントから `toggleCategoryFilterVisibility()` 関数を実行し、変数 `filterVisible` の状態に応じてカテゴリチップ群の親要素の `display` プロパティを `block` / `none` に切り替えます。同時に、矢印アイコンの回転（CSS `transform` による `rotate`）を連動させます。
 * **日曜開始カレンダーの描画アルゴリズム (JavaScript)**:
   * **曜日ヘッダーの描画**: 配列 `dayNames = ['日', '月', '火', '水', '木', '金', '土']` に基づいて曜日を表示します。
   * **月間カレンダーの日付余白計算**: 初日の曜日インデックス（0:日, 1:月, ...）をそのまま前月の余白日数（`prevDaysOffset = startDay`）として扱い、カレンダー開始日を算出します。
