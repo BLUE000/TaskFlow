@@ -789,9 +789,13 @@ function h(string $str): string {
             <!-- フィルターコントロール -->
             <div class="filter-panel">
                 <div class="filter-group">
-                    <span class="filter-label">カテゴリ絞り込み:</span>
-                    <div id="category-filters" class="category-filter-list">
-                        <!-- JSで動的にカテゴリトグルボタンを生成 -->
+                    <span class="filter-label" onclick="toggleCategoryFilterVisibility()" style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem; user-select: none;">
+                        カテゴリ絞り込み: <span id="filter-toggle-icon" style="display: inline-block; transition: transform 0.2s; transform: rotate(0deg); font-size: 0.75rem;">▼</span>
+                    </span>
+                    <div id="category-filters-container" style="display: block;">
+                        <div id="category-filters" class="category-filter-list">
+                            <!-- JSで動的にカテゴリトグルボタンを生成 -->
+                        </div>
                     </div>
                 </div>
                 <?php if ($isAdmin): ?>
@@ -960,6 +964,23 @@ function h(string $str): string {
             }
             updateUrlParams();
             renderView();
+        }
+
+        let filterVisible = true;
+        function toggleCategoryFilterVisibility() {
+            const container = document.getElementById('category-filters-container');
+            const icon = document.getElementById('filter-toggle-icon');
+            if (!container || !icon) return;
+
+            if (filterVisible) {
+                container.style.display = 'none';
+                icon.style.transform = 'rotate(-90deg)';
+                filterVisible = false;
+            } else {
+                container.style.display = 'block';
+                icon.style.transform = 'rotate(0deg)';
+                filterVisible = true;
+            }
         }
 
         // フィルター状態が変わったときの再描画（非公開トグル用）
