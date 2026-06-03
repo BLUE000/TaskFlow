@@ -29,8 +29,8 @@ QJsonObject NetworkManager::post(const QString& url, const QJsonObject& jsonPayl
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
     
-    // 10秒のタイムアウトを設定
-    timer.start(10000);
+    // 30秒のタイムアウトを設定 (本番環境のレイテンシ対応)
+    timer.start(30000);
     loop.exec();
 
     QJsonObject responseObj;
