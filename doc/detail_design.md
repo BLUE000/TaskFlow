@@ -115,6 +115,24 @@ MySQL データベースへの予定データの保存（CRUD）を担当し、S
   2. 取得したレコードセットをループ処理し、各レコードの `title` を `CryptoUtil::decrypt` で平文に復号します。また、`description` も存在する場合は同様に復号します。
   3. タイトルと詳細が平文に復元された予定レコードの配列を返却します。
 
+### 2.3. 一般閲覧画面（`index.php`）の制御ロジック
+* **ログイン・ログアウト処理**:
+  * 一般画面でログインPOSTリクエスト（パラメータ: `form_action = index_login`, `password`）を検知した際、`admin.php` と同様に `password_verify` で管理者パスワードハッシュと比較検証します。認証成功時は、セッションIDを再生成した上で `$_SESSION['admin_logged_in'] = true` をセットし、`index.php` へリダイレクトして非公開データを含む全件をロードします。
+  * `index.php?action=logout` アクセス時は、セッションをクリアした上で `index.php` へリダイレクトし、ログイン状態を解除します。
+* **カテゴリのGETパラメータ連動（JavaScript側）**:
+  * 画面起動時に `URLSearchParams` を用いて `categories` パラメータを抽出し、カンマ区切りで複数のカテゴリを取得。それを `selectedCategories` セットに初期登録します。
+  * `initCategoryFilters` 実行時に、該当するカテゴリバッジ（チップ）に `.active` クラスを自動付与して初期レンダリングを行います。
+  * カテゴリバッジがクリックされた際、`selectedCategories` セットを更新したのち、`history.replaceState` を用いて、ブラウザのURLパラメータを `?categories=cat1,cat2` のようにリアルタイムに上書きします（ページのリロードは行いません）。
+
+### 2.4. 管理者用パスワード変更処理（`admin.php`）
+* **パスワード変更ロジック**:
+  1. フォームアクション `change_password` 処理にて、現在のパスワード、新しいパスワード、確認用パスワードのPOST値を受信します。
+  2. バリデーションチェック（新しいパスワードの文字数が6文字以上、確認用との一致）を行います。
+  3. `password_verify($currentPassword, ADMIN_PASSWORD_HASH)` を用いて現在のパスワードの整合性を確認します。
+  4. 新しいパスワードを `password_hash($newPassword, PASSWORD_BCRYPT)` でハッシュ化します。
+  5. 設定ファイル `config.php` の文字列を読み込み、元のハッシュ行（`define('ADMIN_PASSWORD_HASH', '...');`）を特定します（`define('ADMIN_PASSWORD_HASH', '` + `ADMIN_PASSWORD_HASH` + `');`）。
+  6. 新しいハッシュ行を作成し、`str_replace` によりソースコード内の該当行を置換します。
+  7. ファイル書き込み中の予期せぬエラーやサーバー停止によるファイル破損を避けるため、まず一時ファイル（`config.php.tmp`）にコンテンツを書き出します。書き出し完了後、`rename` 関数を使用してアトミックに元の `config.php` と差し替えます。
 
 ---
 
