@@ -656,10 +656,12 @@ function h(string $str): string {
                                         <option value="period">期間予定 (period)</option>
                                         <option value="task">個人タスク (task)</option>
                                     </select>
+                                    <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 簡易予定：日時のみのシンプルな予定。期間予定：複数日にまたがる予定。個人タスク：時間枠に割り当て、重み（所要時間）を集計する進捗管理用の予定。</p>
                                 </div>
                                 <div class="form-group">
                                     <label for="sched-category">カテゴリ/タグ</label>
                                     <input type="text" id="sched-category" name="category" placeholder="work, private, studyなど">
+                                    <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 予定の分類タグ（一般画面での絞り込みフィルターで使用）。半角英数字で入力してください。</p>
                                 </div>
                             </div>
 
@@ -849,6 +851,7 @@ function h(string $str): string {
                             <div class="form-group">
                                 <label for="slot-name">時間枠の名前 *</label>
                                 <input type="text" id="slot-name" name="name" required placeholder="例: 午前枠, 午後枠">
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ カレンダー上でタスクの所要時間を集計・管理する単位となる名前（例: 午前枠、午後枠）。</p>
                             </div>
 
                             <div class="form-row">
@@ -865,6 +868,7 @@ function h(string $str): string {
                             <div class="form-group">
                                 <label for="slot-limit">許容作業時間 (limit_hours) *</label>
                                 <input type="number" id="slot-limit" name="limit_hours" step="0.5" min="0" value="0.0">
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 1日のうち、この時間枠に割り当てられるタスクの最大合計時間（例: 午前枠なら3.0時間）。これを超えると負荷警告ハイライトが作動します。</p>
                             </div>
 
                             <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
@@ -922,6 +926,7 @@ function h(string $str): string {
                             <div class="form-group">
                                 <label for="wh-url">Discord Webhook URL *</label>
                                 <input type="text" id="wh-url" name="url" required placeholder="https://discord.com/api/webhooks/...">
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ Discordの対象テキストチャンネルの「設定」➔「連携サービス」➔「ウェブフックを作成」➔「ウェブフックURLをコピー」から取得したURLを入力してください。</p>
                             </div>
 
                             <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem;">
