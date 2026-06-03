@@ -33,6 +33,54 @@ $db = get_db_connection();
 $scheduleRepo = new ScheduleRepository($db);
 $timeSlotRepo = new TimeSlotRepository($db);
 
+// CSRFトークンの生成
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// ログアウト処理
+if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+    $_SESSION = [];
+    if (ini_get("session.use_cookies")) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000,
+            $params["path"], $params["domain"],
+            $params["secure"], $params["httponly"]
+        );
+    }
+    session_destroy();
+    
+    // GETパラメータを保持したままログアウト後のURLへリダイレクト
+    $query = !empty($_GET) ? '?' . http_build_query(array_filter($_GET, function($k) { return $k !== 'action'; }, ARRAY_FILTER_USE_KEY)) : '';
+    header("Location: index.php" . $query);
+    exit;
+}
+
+// ログイン処理
+$login_error = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && $_POST['form_action'] === 'index_login') {
+    // CSRF検証
+    if (empty($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        header('HTTP/1.1 403 Forbidden');
+        echo "CSRF token verification failed.";
+        exit;
+    }
+
+    $password = $_POST['password'] ?? '';
+    if (password_verify($password, ADMIN_PASSWORD_HASH)) {
+        // セッションIDの再生成
+        session_regenerate_id(true);
+        $_SESSION['admin_logged_in'] = true;
+        
+        // GETパラメータ（categoriesなど）を維持してリダイレクト
+        $query = !empty($_GET) ? '?' . http_build_query($_GET) : '';
+        header("Location: index.php" . $query);
+        exit;
+    } else {
+        $login_error = 'パスワードが正しくありません。';
+    }
+}
+
 // 管理者セッションの判定
 $isAdmin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
 
@@ -640,6 +688,68 @@ function h(string $str): string {
                 width: 100%;
             }
         }
+
+        /* ログインモーダル */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(2, 6, 17, 0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition-smooth);
+        }
+
+        .modal-content {
+            background: rgba(30, 41, 59, 0.75);
+            border: 1px solid var(--panel-border);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 2.5rem;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            position: relative;
+            text-align: center;
+            animation: modalFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-close-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1.25rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.8rem;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+        }
+
+        .modal-close-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-content h2 {
+            font-size: 1.6rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
     </style>
 </head>
 <body>
@@ -649,11 +759,18 @@ function h(string $str): string {
                 <h1 id="app-logo">TaskFlow</h1>
                 <p>ハイブリッド スケジュール ＆ 負荷分析ダッシュボード</p>
             </div>
-            <div style="display:flex; align-items:center; gap:1rem;">
+            <div style="display:flex; align-items:center; gap:1rem; flex-wrap: wrap;">
                 <?php if ($isAdmin): ?>
                     <a href="admin.php" class="tab-btn" style="color:var(--accent-purple); border:1px solid rgba(168,85,247,0.3); text-decoration:none; display:flex; align-items:center; gap:0.25rem;">
                         🔒 管理コンソールへ
                     </a>
+                    <a href="index.php?action=logout<?php echo !empty($_GET) && !isset($_GET['action']) ? '&' . h(http_build_query($_GET)) : ''; ?>" class="tab-btn" style="color:var(--text-secondary); border:1px solid var(--panel-border); text-decoration:none;">
+                        ログアウト
+                    </a>
+                <?php else: ?>
+                    <button class="tab-btn" onclick="showLoginModal()" style="color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3);">
+                        管理者ログイン
+                    </button>
                 <?php endif; ?>
                 <div class="view-controls">
                     <button class="tab-btn active" id="tab-month" onclick="switchView('month')">
@@ -736,9 +853,64 @@ function h(string $str): string {
 
         // ページロード時の初期化
         window.addEventListener('DOMContentLoaded', () => {
+            parseUrlParams();
             initCategoryFilters();
             renderView();
         });
+
+        // ログインモーダル表示
+        function showLoginModal() {
+            const modal = document.getElementById('login-modal');
+            if (modal) {
+                modal.style.display = 'flex';
+                document.getElementById('admin-password').focus();
+            }
+        }
+
+        // ログインモーダル非表示
+        function closeLoginModal() {
+            const modal = document.getElementById('login-modal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // URLパラメータの解析とselectedCategoriesへの登録
+        function parseUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            const categoriesParam = params.get('categories');
+            if (categoriesParam) {
+                categoriesParam.split(',').forEach(cat => {
+                    const trimmed = cat.trim();
+                    if (trimmed) {
+                        selectedCategories.add(trimmed);
+                    }
+                });
+            }
+        }
+
+        // URLパラメータの更新 (history.replaceState)
+        function updateUrlParams() {
+            const url = new URL(window.location);
+            if (selectedCategories.size > 0) {
+                url.searchParams.set('categories', Array.from(selectedCategories).join(','));
+            } else {
+                url.searchParams.delete('categories');
+            }
+            window.history.replaceState({}, '', url);
+
+            // ログインフォームのアクションURLパラメータも追従させ、リダイレクト後のフィルタ復元を可能にする
+            const loginForm = document.querySelector('#login-modal form');
+            if (loginForm) {
+                const actionUrl = new URL('index.php', window.location.origin);
+                url.searchParams.forEach((val, key) => {
+                    if (key !== 'action') {
+                        actionUrl.searchParams.set(key, val);
+                    }
+                });
+                loginForm.action = actionUrl.pathname + actionUrl.search;
+            }
+        }
 
         // カテゴリフィルターUIの動的生成
         function initCategoryFilters() {
@@ -763,6 +935,10 @@ function h(string $str): string {
             categories.forEach(cat => {
                 const chip = document.createElement('div');
                 chip.className = 'category-chip';
+                // 初期ロード時に選択済みの場合はactiveクラスを付与
+                if (selectedCategories.has(cat)) {
+                    chip.classList.add('active');
+                }
                 chip.innerText = cat;
                 chip.dataset.category = cat;
                 chip.addEventListener('click', () => toggleCategoryFilter(chip, cat));
@@ -779,6 +955,7 @@ function h(string $str): string {
                 selectedCategories.add(category);
                 chip.classList.add('active');
             }
+            updateUrlParams();
             renderView();
         }
 
@@ -886,10 +1063,10 @@ function h(string $str): string {
             }
         }
 
-        // 週の開始日（月曜日始まり）を取得する
+        // 週の開始日（日曜日始まり）を取得する
         function getStartOfWeek(date) {
             const day = date.getDay();
-            const diff = date.getDate() - day + (day === 0 ? -6 : 1); // 日曜日の場合は前週の月曜日へ
+            const diff = date.getDate() - day; // その週の日曜日へ
             return new Date(date.setDate(diff));
         }
 
@@ -937,12 +1114,12 @@ function h(string $str): string {
             container.innerHTML = '';
 
             // 曜日ヘッダー
-            const dayNames = ['月', '火', '水', '木', '金', '土', '日'];
+            const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
             dayNames.forEach((name, idx) => {
                 const header = document.createElement('div');
                 header.className = 'day-header';
-                if (idx === 5) header.classList.add('saturday');
-                if (idx === 6) header.classList.add('sunday');
+                if (idx === 0) header.classList.add('sunday');
+                if (idx === 6) header.classList.add('saturday');
                 header.innerText = name;
                 container.appendChild(header);
             });
@@ -954,9 +1131,9 @@ function h(string $str): string {
             const firstDayOfMonth = new Date(year, month, 1);
             const lastDayOfMonth = new Date(year, month + 1, 0);
 
-            // カレンダー開始日（月曜日に合わせるために前月分を含める）
+            // カレンダー開始日（日曜日に合わせるために前月分を含める）
             let startDay = firstDayOfMonth.getDay();
-            let prevDaysOffset = startDay === 0 ? 6 : startDay - 1; // 日曜日の場合は6日分、月曜日なら0日分
+            let prevDaysOffset = startDay; // 日曜日(0)なら0日分、月曜日(1)なら1日分
 
             const calendarStart = new Date(firstDayOfMonth);
             calendarStart.setDate(calendarStart.getDate() - prevDaysOffset);
@@ -1102,12 +1279,12 @@ function h(string $str): string {
             container.innerHTML = '';
 
             // 曜日ヘッダー
-            const dayNames = ['月', '火', '水', '木', '金', '土', '日'];
+            const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
             dayNames.forEach((name, idx) => {
                 const header = document.createElement('div');
                 header.className = 'day-header';
-                if (idx === 5) header.classList.add('saturday');
-                if (idx === 6) header.classList.add('sunday');
+                if (idx === 0) header.classList.add('sunday');
+                if (idx === 6) header.classList.add('saturday');
                 
                 const d = new Date(startOfWeek);
                 d.setDate(startOfWeek.getDate() + idx);
@@ -1431,5 +1608,25 @@ function h(string $str): string {
                 .replace(/'/g, '&#039;');
         }
     </script>
+
+    <!-- 管理者ログインモーダル -->
+    <div id="login-modal" class="modal-overlay" style="display: <?php echo $login_error ? 'flex' : 'none'; ?>;">
+        <div class="modal-content">
+            <button class="modal-close-btn" onclick="closeLoginModal()">&times;</button>
+            <h2>管理者ログイン</h2>
+            <?php if ($login_error): ?>
+                <div class="alert alert-error" style="margin-bottom: 1rem; padding: 0.5rem 1rem; font-size: 0.8rem; text-align: left;"><?php echo h($login_error); ?></div>
+            <?php endif; ?>
+            <form method="POST" action="index.php<?php echo !empty($_GET) ? '?' . h(http_build_query(array_filter($_GET, function($k) { return $k !== 'action'; }, ARRAY_FILTER_USE_KEY))) : ''; ?>">
+                <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                <input type="hidden" name="form_action" value="index_login">
+                <div class="form-group" style="text-align: left; display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
+                    <label for="admin-password" style="font-size: 0.85rem; font-weight:600; color:var(--text-secondary);">パスワード</label>
+                    <input type="password" id="admin-password" name="password" required placeholder="管理者パスワードを入力" autofocus style="width:100%; padding:0.75rem 1rem; background:rgba(15, 23, 42, 0.6); border:1px solid var(--panel-border); border-radius:8px; color:var(--text-primary);">
+                </div>
+                <button type="submit" class="btn" style="width:100%; margin-top: 1rem; font-weight:600;">ログイン</button>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
