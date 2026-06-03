@@ -567,11 +567,11 @@ function h(string $str): string {
             <div class="admin-layout">
                 <!-- 左メニュー -->
                 <nav class="sidebar">
-                    <a class="menu-item active" onclick="showSection('section-schedules')">予定・タスク管理</a>
-                    <a class="menu-item" onclick="showSection('section-bulk')">一括公開設定</a>
-                    <a class="menu-item" onclick="showSection('section-timeslots')">時間枠設定</a>
-                    <a class="menu-item" onclick="showSection('section-webhooks')">Discord Webhook設定</a>
-                    <a class="menu-item" onclick="showSection('section-holiday')">祝日データ更新</a>
+                    <a class="menu-item active" onclick="showSection(this, 'section-schedules')">予定・タスク管理</a>
+                    <a class="menu-item" onclick="showSection(this, 'section-bulk')">一括公開設定</a>
+                    <a class="menu-item" onclick="showSection(this, 'section-timeslots')">時間枠設定</a>
+                    <a class="menu-item" onclick="showSection(this, 'section-webhooks')">Discord Webhook設定</a>
+                    <a class="menu-item" onclick="showSection(this, 'section-holiday')">祝日データ更新</a>
                 </nav>
 
                 <!-- 右メインパネル -->
@@ -691,7 +691,7 @@ function h(string $str): string {
                                 </thead>
                                 <tbody>
                                     <?php 
-                                    $activeScheds = array_filter($allSchedules, function($s) { return !parseInt($s['is_deleted']); });
+                                    $activeScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted']; });
                                     if (empty($activeScheds)): 
                                     ?>
                                         <tr>
@@ -956,14 +956,14 @@ function h(string $str): string {
 
     <script>
         // セクションの切り替え
-        function showSection(sectionId) {
+        function showSection(element, sectionId) {
             document.querySelectorAll('.panel-section').forEach(sec => sec.classList.remove('active'));
             document.querySelectorAll('.menu-item').forEach(item => item.classList.remove('active'));
             
             document.getElementById(sectionId).classList.add('active');
             
             // サイドバーのメニュー項目の active クラス切り替え
-            event.target.classList.add('active');
+            element.classList.add('active');
         }
 
         // 予定フォーム項目の表示制御 (タスク選択時のみ専用項目を表示)
