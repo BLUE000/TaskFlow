@@ -3,6 +3,13 @@
  * TaskFlow 一般閲覧画面 (Calendar & Gantt Chart View)
  */
 
+// セッションパラメータの保護設定 (セッション開始前に設定)
+ini_set('session.cookie_httponly', 1);
+if (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') {
+    ini_set('session.cookie_secure', 1);
+}
+session_start();
+
 require_once __DIR__ . '/../config/config.php';
 
 // クラスオートローダーの登録
@@ -26,8 +33,11 @@ $db = get_db_connection();
 $scheduleRepo = new ScheduleRepository($db);
 $timeSlotRepo = new TimeSlotRepository($db);
 
-// データの取得 (公開設定されたもののみ)
-$schedules = $scheduleRepo->findAllPublic();
+// 管理者セッションの判定
+$isAdmin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+
+// データの取得 (管理者の場合は全件、一般ユーザーは公開設定されたもののみ)
+$schedules = $isAdmin ? $scheduleRepo->findAll() : $scheduleRepo->findAllPublic();
 $timeSlots = $timeSlotRepo->findAllActive();
 
 // 祝日データの取得
@@ -515,6 +525,121 @@ function h(string $str): string {
             .holiday-label { display: none; }
             .gantt-grid { grid-template-columns: 120px 1fr; }
         }
+
+        /* フィルターパネルのスタイリング */
+        .filter-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            background: rgba(15, 23, 42, 0.4);
+            border: 1px solid var(--panel-border);
+            padding: 1rem 1.5rem;
+            border-radius: 16px;
+            margin-bottom: 1.5rem;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .filter-label {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+        }
+
+        .category-filter-list {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .category-chip {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--panel-border);
+            color: var(--text-secondary);
+            padding: 0.35rem 0.85rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            user-select: none;
+        }
+
+        .category-chip:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .category-chip.active {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(168, 85, 247, 0.25));
+            border-color: var(--accent-blue);
+            color: var(--text-primary);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+        }
+
+        .admin-only-controls {
+            border-left: 1px solid var(--panel-border);
+            padding-left: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .badge-admin {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            background: rgba(168, 85, 247, 0.15);
+            color: #d8b4fe;
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            letter-spacing: 0.05em;
+        }
+
+        /* トグルスイッチスタイル */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+
+        .toggle-input {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        /* 非公開予定のスタイル表示 */
+        .event-item.private-schedule {
+            background: rgba(241, 245, 249, 0.03) !important;
+            border-left: 3px dashed #64748b !important;
+            color: #94a3b8 !important;
+            opacity: 0.65;
+        }
+        
+        .gantt-bar.private-schedule {
+            background: linear-gradient(90deg, #334155, #1e293b) !important;
+            border: 1px dashed #475569 !important;
+            color: #94a3b8 !important;
+            opacity: 0.65;
+        }
+
+        @media (max-width: 768px) {
+            .admin-only-controls {
+                border-left: none;
+                padding-left: 0;
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
@@ -524,21 +649,47 @@ function h(string $str): string {
                 <h1 id="app-logo">TaskFlow</h1>
                 <p>ハイブリッド スケジュール ＆ 負荷分析ダッシュボード</p>
             </div>
-            <div class="view-controls">
-                <button class="tab-btn active" id="tab-month" onclick="switchView('month')">
-                    月間カレンダー
-                </button>
-                <button class="tab-btn" id="tab-week" onclick="switchView('week')">
-                    週間スケジュール
-                </button>
-                <button class="tab-btn" id="tab-gantt" onclick="switchView('gantt')">
-                    ガントチャート
-                </button>
+            <div style="display:flex; align-items:center; gap:1rem;">
+                <?php if ($isAdmin): ?>
+                    <a href="admin.php" class="tab-btn" style="color:var(--accent-purple); border:1px solid rgba(168,85,247,0.3); text-decoration:none; display:flex; align-items:center; gap:0.25rem;">
+                        🔒 管理コンソールへ
+                    </a>
+                <?php endif; ?>
+                <div class="view-controls">
+                    <button class="tab-btn active" id="tab-month" onclick="switchView('month')">
+                        月間カレンダー
+                    </button>
+                    <button class="tab-btn" id="tab-week" onclick="switchView('week')">
+                        週間スケジュール
+                    </button>
+                    <button class="tab-btn" id="tab-gantt" onclick="switchView('gantt')">
+                        ガントチャート
+                    </button>
+                </div>
             </div>
         </header>
 
         <!-- メインパネル -->
         <main class="view-panel">
+            
+            <!-- フィルターコントロール -->
+            <div class="filter-panel">
+                <div class="filter-group">
+                    <span class="filter-label">カテゴリ絞り込み:</span>
+                    <div id="category-filters" class="category-filter-list">
+                        <!-- JSで動的にカテゴリトグルボタンを生成 -->
+                    </div>
+                </div>
+                <?php if ($isAdmin): ?>
+                    <div class="filter-group admin-only-controls">
+                        <div class="toggle-container">
+                            <input type="checkbox" id="toggle-private-schedules" class="toggle-input" checked onchange="onFilterChange()">
+                            <label for="toggle-private-schedules" style="cursor:pointer; font-size: 0.85rem; font-weight:600; color: var(--accent-purple);">非公開の予定を表示する</label>
+                        </div>
+                        <span class="badge-admin">ADMIN MODE</span>
+                    </div>
+                <?php endif; ?>
+            </div>
             <div class="toolbar">
                 <div class="nav-controls">
                     <button class="nav-btn" onclick="prevPeriod()">&lt;</button>
@@ -578,10 +729,91 @@ function h(string $str): string {
         let currentDate = new Date(2026, 5, 1); // 2026年6月を初期値とする (月は0始まりなので 5=6月)
         let currentView = 'month'; // 'month', 'week', 'gantt'
 
+        // 選択されたカテゴリのセット (空の場合はすべて表示)
+        const selectedCategories = new Set();
+        // 管理者権限フラグ
+        const isAdmin = <?php echo $isAdmin ? 'true' : 'false'; ?>;
+
         // ページロード時の初期化
         window.addEventListener('DOMContentLoaded', () => {
+            initCategoryFilters();
             renderView();
         });
+
+        // カテゴリフィルターUIの動的生成
+        function initCategoryFilters() {
+            const filterContainer = document.getElementById('category-filters');
+            if (!filterContainer) return;
+
+            // rawSchedules から存在するカテゴリ（空文字除く）を取得
+            const categories = new Set();
+            rawSchedules.forEach(s => {
+                if (s.category && s.category.trim() !== '') {
+                    categories.add(s.category.trim());
+                }
+            });
+
+            filterContainer.innerHTML = '';
+
+            if (categories.size === 0) {
+                filterContainer.innerHTML = '<span style="font-size:0.75rem; color:var(--text-secondary); font-style:italic;">(設定済みのカテゴリはありません)</span>';
+                return;
+            }
+
+            categories.forEach(cat => {
+                const chip = document.createElement('div');
+                chip.className = 'category-chip';
+                chip.innerText = cat;
+                chip.dataset.category = cat;
+                chip.addEventListener('click', () => toggleCategoryFilter(chip, cat));
+                filterContainer.appendChild(chip);
+            });
+        }
+
+        // カテゴリフィルターの切り替え
+        function toggleCategoryFilter(chip, category) {
+            if (selectedCategories.has(category)) {
+                selectedCategories.delete(category);
+                chip.classList.remove('active');
+            } else {
+                selectedCategories.add(category);
+                chip.classList.add('active');
+            }
+            renderView();
+        }
+
+        // フィルター状態が変わったときの再描画（非公開トグル用）
+        function onFilterChange() {
+            renderView();
+        }
+
+        // フィルターが適用された予定データを取得する
+        function getFilteredSchedules() {
+            const showPrivateCheckbox = document.getElementById('toggle-private-schedules');
+            const showPrivate = showPrivateCheckbox ? showPrivateCheckbox.checked : false;
+
+            return rawSchedules.filter(sched => {
+                // 1. 論理削除された予定は除外
+                if (parseInt(sched.is_deleted)) return false;
+
+                // 2. 非公開予定のフィルタリング (管理者が非公開トグルをOFFにしている場合)
+                if (parseInt(sched.is_public) === 0) {
+                    if (!isAdmin || !showPrivate) {
+                        return false;
+                    }
+                }
+
+                // 3. カテゴリでの絞り込み
+                if (selectedCategories.size > 0) {
+                    const schedCat = (sched.category || '').trim();
+                    if (!selectedCategories.has(schedCat)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+        }
 
         // 期間を戻す
         function prevPeriod() {
@@ -676,9 +908,9 @@ function h(string $str): string {
                 };
             });
 
-            // 予定データの集計
-            rawSchedules.forEach(sched => {
-                if (sched.type === 'task' && sched.time_slot_id && sched.status !== 'done' && !parseInt(sched.is_deleted)) {
+            // 予定データの集計 (絞り込み済みの予定を使用)
+            getFilteredSchedules().forEach(sched => {
+                if (sched.type === 'task' && sched.time_slot_id && sched.status !== 'done') {
                     // 日付の合致チェック (start_at を YYYY-MM-DD に変換)
                     if (sched.start_at && sched.start_at.substring(0, 10) === dateStr) {
                         const slotId = sched.time_slot_id;
@@ -777,9 +1009,7 @@ function h(string $str): string {
                 listContainer.className = 'event-list';
                 
                 // その日の予定をフィルタリングして追加
-                const dailyEvents = rawSchedules.filter(sched => {
-                    if (parseInt(sched.is_deleted)) return false;
-                    
+                const dailyEvents = getFilteredSchedules().filter(sched => {
                     if (sched.start_at) {
                         const sDate = sched.start_at.substring(0, 10);
                         if (sched.type === 'period' && sched.end_at) {
@@ -795,13 +1025,23 @@ function h(string $str): string {
                     const evItem = document.createElement('div');
                     evItem.className = `event-item event-${event.type}`;
                     
+                    const isPrivate = parseInt(event.is_public) === 0;
+                    if (isPrivate) {
+                        evItem.classList.add('private-schedule');
+                    }
+
                     let prefix = "";
+                    if (isPrivate) {
+                        prefix = `🔒 `;
+                    }
+
                     if (event.type === 'task') {
                         evItem.classList.add(event.status); // doing, todo
-                        prefix = `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
+                        prefix += `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
                     }
                     
-                    evItem.innerHTML = `${prefix}${escapeHtml(event.title)}`;
+                    const displayTitle = isPrivate ? `[非公開] ${event.title}` : event.title;
+                    evItem.innerHTML = `${prefix}${escapeHtml(displayTitle)}`;
                     evItem.addEventListener('click', (e) => {
                         e.stopPropagation();
                         showEventDetail(event, cellDate);
@@ -916,8 +1156,7 @@ function h(string $str): string {
                 listContainer.className = 'event-list';
                 listContainer.style.maxHeight = '240px';
                 
-                const dailyEvents = rawSchedules.filter(sched => {
-                    if (parseInt(sched.is_deleted)) return false;
+                const dailyEvents = getFilteredSchedules().filter(sched => {
                     if (sched.start_at) {
                         const sDate = sched.start_at.substring(0, 10);
                         if (sched.type === 'period' && sched.end_at) {
@@ -934,15 +1173,25 @@ function h(string $str): string {
                     evItem.className = `event-item event-${event.type}`;
                     evItem.style.whiteSpace = 'normal'; // 週表示は折り返し許可
                     
+                    const isPrivate = parseInt(event.is_public) === 0;
+                    if (isPrivate) {
+                        evItem.classList.add('private-schedule');
+                    }
+
                     let prefix = "";
+                    if (isPrivate) {
+                        prefix = `🔒 `;
+                    }
+
                     let suffix = "";
                     if (event.type === 'task') {
                         evItem.classList.add(event.status);
-                        prefix = `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
+                        prefix += `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
                         suffix = ` <span style="opacity:0.6;font-size:0.65rem">(${event.weight}h)</span>`;
                     }
                     
-                    evItem.innerHTML = `${prefix}${escapeHtml(event.title)}${suffix}`;
+                    const displayTitle = isPrivate ? `[非公開] ${event.title}` : event.title;
+                    evItem.innerHTML = `${prefix}${escapeHtml(displayTitle)}${suffix}`;
                     evItem.addEventListener('click', (e) => {
                         e.stopPropagation();
                         showEventDetail(event, cellDate);
@@ -1038,9 +1287,7 @@ function h(string $str): string {
             const firstDateStr = formatDate(timelineDays[0]);
             const lastDateStr = formatDate(timelineDays[timelineDays.length - 1]);
 
-            const targetEvents = rawSchedules.filter(sched => {
-                if (parseInt(sched.is_deleted)) return false;
-                
+            const targetEvents = getFilteredSchedules().filter(sched => {
                 if (sched.start_at) {
                     const sDate = sched.start_at.substring(0, 10);
                     const eDate = sched.end_at ? sched.end_at.substring(0, 10) : sDate;
@@ -1069,7 +1316,14 @@ function h(string $str): string {
                 // 左パネル追加
                 const rowHeader = document.createElement('div');
                 rowHeader.className = 'gantt-row-header';
-                rowHeader.innerText = event.title;
+                
+                const isPrivate = parseInt(event.is_public) === 0;
+                if (isPrivate) {
+                    rowHeader.classList.add('private-schedule');
+                    rowHeader.innerText = `🔒 [非公開] ${event.title}`;
+                } else {
+                    rowHeader.innerText = event.title;
+                }
                 leftPanel.appendChild(rowHeader);
 
                 // 右パネルの行追加
@@ -1104,6 +1358,11 @@ function h(string $str): string {
                 if (durationDays > 0) {
                     const bar = document.createElement('div');
                     bar.className = `gantt-bar ${event.type}`;
+                    
+                    if (isPrivate) {
+                        bar.classList.add('private-schedule');
+                    }
+
                     if (event.type === 'task') {
                         bar.classList.add(event.status);
                     }
@@ -1111,7 +1370,9 @@ function h(string $str): string {
                     // 配置用座標 (1セル = 40px)
                     bar.style.left = `${startOffset * 40 + 8}px`;
                     bar.style.width = `${durationDays * 40 - 16}px`;
-                    bar.innerText = event.title;
+                    
+                    const displayTitle = isPrivate ? `🔒 [非公開] ${event.title}` : event.title;
+                    bar.innerText = displayTitle;
 
                     bar.addEventListener('click', () => {
                         showEventDetail(event, new Date(startAtStr));
