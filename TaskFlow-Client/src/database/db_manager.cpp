@@ -113,8 +113,37 @@ bool DBManager::initialize(const QString& dbPath) {
     return true;
 }
 
+#include <QThread>
+#include <QCoreApplication>
+
 QSqlDatabase DBManager::database() const {
-    return m_db;
+    QThread* currentThread = QThread::currentThread();
+    QThread* mainThread = QCoreApplication::instance() ? QCoreApplication::instance()->thread() : nullptr;
+
+    if (!mainThread || currentThread == mainThread) {
+        return m_db;
+    }
+
+    QString connectionName = QString("sync_db_conn_%1").arg(reinterpret_cast<quintptr>(currentThread));
+    if (QSqlDatabase::contains(connectionName)) {
+        QSqlDatabase db = QSqlDatabase::database(connectionName);
+        if (!db.isOpen()) {
+            db.open();
+        }
+        return db;
+    }
+
+    QSqlDatabase threadDb = QSqlDatabase::addDatabase("QSQLITE", connectionName);
+    threadDb.setDatabaseName(m_db.databaseName());
+
+    if (!threadDb.open()) {
+        qCritical() << "Failed to open SQLite database for thread:" << threadDb.lastError().text();
+    } else {
+        QSqlQuery pragmaQuery(threadDb);
+        pragmaQuery.exec("PRAGMA foreign_keys = ON;");
+    }
+
+    return threadDb;
 }
 
 void DBManager::close() {
