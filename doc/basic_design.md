@@ -91,6 +91,18 @@ MySQL 8.0 と SQLite 3 でデータ構造の整合性を保つため、共通の
 | `updated_at` | DATETIME | NO | - | CURRENT_TIMESTAMP | 最終更新日時 |
 | `is_deleted` | TINYINT(1) | NO | - | 0 | 論理削除フラグ |
 
+### 2.4. `schedule_allocations` テーブル (予定・タスクの日別作業時間配分)
+期間タスクに対して、各日付・時間枠ごとの具体的な作業時間を記録します。
+
+| カラム名 | データ型 | NULL | キー | デフォルト値 | 説明 |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| `id` | VARCHAR(36) | NO | PK | - | UUID (割り当てデータの一意識別子) |
+| `schedule_id` | VARCHAR(36) | NO | FK | - | 予定のID (`schedules.id` への参照) |
+| `date` | DATE | NO | - | - | 割り当て日 (例: "2026-06-01") |
+| `time_slot_id` | VARCHAR(36) | NO | FK | - | 割り当てられた時間枠のID (`time_slots.id` への参照) |
+| `allocated_hours` | DOUBLE | NO | - | 0.0 | この日のこの時間枠に割り当てられた作業時間 (単位: 時間) |
+| `created_at` | DATETIME | NO | - | CURRENT_TIMESTAMP | 作成日時 |
+
 ---
 
 ## 3. SQLite 3 ローカル管理用メタテーブル
@@ -112,6 +124,7 @@ C++アプリ側のローカルDB（SQLite）でのみ、最終同期のタイミ
 
 ### 4.1. 双方向同期フロー
 C++アプリがオンラインになり同期をトリガー（起動時または手動実行）した際、以下の手順で処理を行います。
+※ 子データである `schedule_allocations` は、親 `schedules` レコードの一部として `allocations` 配列形式でネストされてアトミックに同期・保存されます。
 
 ```
 [同期開始]

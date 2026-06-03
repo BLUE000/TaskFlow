@@ -105,15 +105,19 @@ TaskFlow-Client/
 ### 2.2. `ScheduleRepository` クラス
 MySQL データベースへの予定データの保存（CRUD）を担当し、SQLの発行と暗号化・復号のタイミングを制御します。
 
-* **`save($schedule)`**:
+* **`save($schedule, $allocations = [])`**:
   1. 保存対象データ（`$schedule`）の `title`（予定タイトル）を `CryptoUtil::encrypt` を用いて暗号化します。
   2. `description`（予定詳細）が存在し空でない場合は `CryptoUtil::encrypt` を用いて暗号化します（空の場合は `NULL` 値を代入）。
-  3. データベース（MySQL）に対して、重複キー時に上書きを行うための `INSERT INTO ... ON DUPLICATE KEY UPDATE` クエリをプレペアし、UUIDやその他の非暗号化カラム（期間、優先度、重み等）とともに暗号化タイトル・詳細の値を安全にバインドして実行します。
-  4. クエリ実行の成否（成功時は `true`、失敗時は `false`）を返却します。
+  3. データベース（MySQL）に対してトランザクションを開始します。
+  4. データベースに対して、重複キー時に上書きを行うための `INSERT INTO ... ON DUPLICATE KEY UPDATE` クエリをプレペアし、UUIDやその他の非暗号化カラム（期間、優先度、重み等）とともに暗号化タイトル・詳細の値を安全にバインドして実行します。
+  5. 親 `schedule` の保存が成功した場合、既存のこの `schedule_id` に紐づく子レコード `schedule_allocations` を全物理削除（`DELETE FROM schedule_allocations WHERE schedule_id = :schedule_id`）します。
+  6. 引数の `$allocations` 配列をループし、それぞれに新規UUIDを発行して `schedule_allocations` テーブルへ一括インサートします。
+  7. トランザクションをコミットします。エラー時はロールバックして `false` を返します。
 * **`findAllPublic()`**:
   1. データベース（MySQL）に対して、公開予定かつ未削除のレコード（`is_public = 1 AND is_deleted = 0`）を日付（`start_at`）昇順で取得する `SELECT` クエリを実行します。
   2. 取得したレコードセットをループ処理し、各レコードの `title` を `CryptoUtil::decrypt` で平文に復号します。また、`description` も存在する場合は同様に復号します。
-  3. タイトルと詳細が平文に復元された予定レコードの配列を返却します。
+  3. 各予定レコードに紐づく `schedule_allocations` を取得し、`allocations` キーとしてレコード配列内にネスト（内包）させます。
+  4. タイトルと詳細が平文に復元され、日別割り当てデータがネストされた予定レコードの配列を返却します。
 
 ### 2.3. 一般閲覧画面（`index.php`）の制御ロジック
 * **ログイン・ログアウト処理**:
