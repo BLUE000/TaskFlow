@@ -61,6 +61,7 @@ bool SyncClient::pull(const QDateTime& lastSyncedAt, QDateTime& serverTime,
         sched.is_public = obj["is_public"].toInt() != 0;
         sched.is_deleted = obj["is_deleted"].toInt() != 0;
         sched.updated_at = QDateTime::fromString(obj["updated_at"].toString(), "yyyy-MM-dd HH:mm:ss");
+        sched.recurrence_group_id = obj["recurrence_group_id"].toString();
         schedules.append(sched);
     }
 
@@ -147,6 +148,7 @@ bool SyncClient::push(const QList<Schedule>& schedules, const QList<TimeSlot>& t
         obj["is_public"] = s.is_public ? 1 : 0;
         obj["is_deleted"] = s.is_deleted ? 1 : 0;
         obj["updated_at"] = s.updated_at.isValid() ? s.updated_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
+        obj["recurrence_group_id"] = s.recurrence_group_id;
         schedArray.append(obj);
     }
     dataObj["schedules"] = schedArray;

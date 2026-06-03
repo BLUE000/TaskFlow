@@ -5,7 +5,7 @@
 
 echo "=== Verifying public/admin.php security & authentication ===\n";
 
-$targetUrl = "http://localhost:8080/admin.php";
+$targetUrl = "http://localhost:8888/admin.php";
 $cookieFile = __DIR__ . '/../data/cookie.txt';
 
 // クッキーファイルをクリア

@@ -38,6 +38,7 @@ void MainWindow::initUi() {
     ui->cmbType->addItem("Simple Schedule (簡易予定)", "simple");
     ui->cmbType->addItem("Period Schedule (期間予定)", "period");
     ui->cmbType->addItem("Task Schedule (個人タスク)", "task");
+    ui->cmbType->addItem("Memo (やることメモ)", "memo");
 
     // 日時初期値設定 (現在時刻)
     ui->dtStart->setDateTime(QDateTime::currentDateTime());
@@ -62,6 +63,7 @@ void MainWindow::initUi() {
     connect(ui->dtStart, &QDateTimeEdit::dateTimeChanged, this, &MainWindow::onScheduleFormChanged);
     connect(ui->spinWeight, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::onScheduleFormChanged);
     connect(ui->cmbTimeSlot, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onScheduleFormChanged);
+    connect(ui->cmbType, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onTypeChanged);
 
     // 時間枠・Webhook・設定ボタンの接続
     connect(ui->btnAddTimeSlot, &QPushButton::clicked, this, &MainWindow::onAddTimeSlotClicked);
@@ -222,7 +224,7 @@ void MainWindow::onAddScheduleClicked() {
         }
     } else {
         s.type = selectedType;
-        if (s.type == "simple") {
+        if (s.type == "simple" || s.type == "memo") {
             s.start_at = QDateTime();
             s.end_at = QDateTime();
         } else {
@@ -279,7 +281,7 @@ void MainWindow::onSaveScheduleClicked() {
         }
     } else {
         s.type = selectedType;
-        if (s.type == "simple") {
+        if (s.type == "simple" || s.type == "memo") {
             s.start_at = QDateTime();
             s.end_at = QDateTime();
         } else {
@@ -352,6 +354,13 @@ void MainWindow::onScheduleSelected(int row, int /*column*/) {
 void MainWindow::onScheduleFormChanged() {
     if (m_isUpdatingForm) return;
     checkLoadAndWarn();
+}
+
+void MainWindow::onTypeChanged(int /*index*/) {
+    QString type = ui->cmbType->currentData().toString();
+    bool isMemo = (type == "memo");
+    ui->dtStart->setEnabled(!isMemo);
+    ui->dtEnd->setEnabled(!isMemo);
 }
 
 // リアルタイム負荷警告の計算

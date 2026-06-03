@@ -34,6 +34,7 @@ private slots:
     void onClearScheduleFormClicked();
     void onScheduleSelected(int row, int column);
     void onScheduleFormChanged();
+    void onTypeChanged(int index);
 
     // 時間枠(TimeSlot)操作
     void onAddTimeSlotClicked();

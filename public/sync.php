@@ -96,11 +96,11 @@ try {
         $schedSql = "INSERT INTO schedules (
                         id, title, description, type, start_at, end_at, 
                         status, priority, weight, time_slot_id, category, 
-                        is_public, discord_webhook_id, created_at, updated_at, is_deleted
+                        is_public, discord_webhook_id, recurrence_group_id, created_at, updated_at, is_deleted
                     ) VALUES (
                         :id, :title, :description, :type, :start_at, :end_at, 
                         :status, :priority, :weight, :time_slot_id, :category, 
-                        :is_public, :discord_webhook_id, :created_at, :updated_at, :is_deleted
+                        :is_public, :discord_webhook_id, :recurrence_group_id, :created_at, :updated_at, :is_deleted
                     ) ON DUPLICATE KEY UPDATE
                         title = VALUES(title),
                         description = VALUES(description),
@@ -114,10 +114,18 @@ try {
                         category = VALUES(category),
                         is_public = VALUES(is_public),
                         discord_webhook_id = VALUES(discord_webhook_id),
+                        recurrence_group_id = VALUES(recurrence_group_id),
                         updated_at = VALUES(updated_at),
                         is_deleted = VALUES(is_deleted)";
         
         $schedStmt = $db->prepare($schedSql);
+        $delAllocStmt = $db->prepare("DELETE FROM schedule_allocations WHERE schedule_id = :schedule_id");
+        $insAllocStmt = $db->prepare("INSERT INTO schedule_allocations (
+                                        id, schedule_id, date, time_slot_id, allocated_hours, created_at, updated_at, is_deleted
+                                      ) VALUES (
+                                        :id, :schedule_id, :date, :time_slot_id, :allocated_hours, NOW(), NOW(), 0
+                                      )");
+
         foreach ($pushedSchedules as $s) {
             $schedStmt->execute([
                 ':id' => $s['id'],
@@ -133,11 +141,35 @@ try {
                 ':category' => $s['category'] ?? 'general',
                 ':is_public' => (int)($s['is_public'] ?? 0),
                 ':discord_webhook_id' => !empty($s['discord_webhook_id']) ? $s['discord_webhook_id'] : null,
+                ':recurrence_group_id' => !empty($s['recurrence_group_id']) ? $s['recurrence_group_id'] : null,
                 ':created_at' => $s['created_at'] ?? date('Y-m-d H:i:s'),
                 ':updated_at' => $s['updated_at'] ?? date('Y-m-d H:i:s'),
                 ':is_deleted' => (int)($s['is_deleted'] ?? 0)
             ]);
+
+            // allocationsの削除とインサート
+            $delAllocStmt->execute([':schedule_id' => $s['id']]);
+            if (!empty($s['allocations'])) {
+                foreach ($s['allocations'] as $alloc) {
+                    // id がない場合は UUID を生成
+                    $allocId = $alloc['id'];
+                    if (empty($allocId)) {
+                        $bytes = random_bytes(16);
+                        $bytes[6] = chr(ord($bytes[6]) & 0x0f | 0x40);
+                        $bytes[8] = chr(ord($bytes[8]) & 0x3f | 0x80);
+                        $allocId = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+                    }
+                    $insAllocStmt->execute([
+                        ':id' => $allocId,
+                        ':schedule_id' => $s['id'],
+                        ':date' => $alloc['date'],
+                        ':time_slot_id' => $alloc['time_slot_id'],
+                        ':allocated_hours' => (double)$alloc['allocated_hours']
+                    ]);
+                }
+            }
         }
+
 
         // 2. 時間枠の書き込み
         $slotSql = "INSERT INTO time_slots (

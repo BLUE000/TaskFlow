@@ -5,7 +5,7 @@
 
 echo "=== Verifying public/sync.php data synchronization API ===\n";
 
-$targetUrl = "http://localhost:8080/sync.php";
+$targetUrl = "http://localhost:8888/sync.php";
 $apiToken = "tc_f2d6ccf601dd459b515215fd";
 
 // 接続確認のため、MySQLが起動していない場合は事前にエラーとする
@@ -121,6 +121,83 @@ if ($httpCode === 200) {
     }
 } else {
     echo "[ST-SYNC-03-A] \033[31mFAIL\033[0m: Push returned HTTP Code $httpCode (Expected 200).\n";
+    $success = false;
+}
+
+// 4. schedules (recurrence_group_id付き) の PUSH / PULL テスト
+$newSchedId = 'sched-push-test-999';
+$recurrenceGroupId = 'group-uuid-test-888';
+$pushPayload['data']['time_slots'] = [];
+$pushPayload['data']['schedules'] = [
+    [
+        'id' => $newSchedId,
+        'title' => 'EncryptedTitleBase64String',
+        'description' => 'EncryptedDescBase64String',
+        'type' => 'period',
+        'start_at' => '2026-06-04 10:00:00',
+        'end_at' => '2026-06-04 12:00:00',
+        'status' => 'todo',
+        'priority' => 0,
+        'weight' => 2.0,
+        'time_slot_id' => null,
+        'category' => 'test',
+        'is_public' => 0,
+        'discord_webhook_id' => null,
+        'recurrence_group_id' => $recurrenceGroupId,
+        'created_at' => date('Y-m-d H:i:s'),
+        'updated_at' => date('Y-m-d H:i:s'),
+        'is_deleted' => 0
+    ]
+];
+
+$httpCode = 0;
+$res = sendJsonPost($targetUrl, $pushPayload, $httpCode);
+if ($httpCode === 200) {
+    $data = json_decode($res, true);
+    if ($data && isset($data['status']) && $data['status'] === 'success') {
+        echo "[ST-SYNC-04-A] PASS: Push schedule with recurrence_group_id returned success.\n";
+        
+        $db = get_db_connection();
+        $stmt = $db->prepare("SELECT recurrence_group_id FROM schedules WHERE id = :id");
+        $stmt->execute([':id' => $newSchedId]);
+        $val = $stmt->fetchColumn();
+        if ($val === $recurrenceGroupId) {
+            echo "[ST-SYNC-04-B] PASS: Pushed recurrence_group_id written to MySQL successfully.\n";
+            
+            $pullRes = sendJsonPost($targetUrl, [
+                'action' => 'pull',
+                'token' => $apiToken,
+                'last_synced_at' => date('Y-m-d H:i:s', time() - 30)
+            ], $httpCode);
+            $pullData = json_decode($pullRes, true);
+            
+            $foundRecurrenceGroupId = null;
+            if (isset($pullData['data']['schedules'])) {
+                foreach ($pullData['data']['schedules'] as $s) {
+                    if ($s['id'] === $newSchedId) {
+                        $foundRecurrenceGroupId = $s['recurrence_group_id'] ?? null;
+                        break;
+                    }
+                }
+            }
+            if ($foundRecurrenceGroupId === $recurrenceGroupId) {
+                echo "[ST-SYNC-04-C] PASS: recurrence_group_id returned in pull response successfully.\n";
+            } else {
+                echo "[ST-SYNC-04-C] \033[31mFAIL\033[0m: recurrence_group_id not found in pull response. Got: " . json_encode($foundRecurrenceGroupId) . "\n";
+                $success = false;
+            }
+            
+            $db->exec("DELETE FROM schedules WHERE id = '$newSchedId'");
+        } else {
+            echo "[ST-SYNC-04-B] \033[31mFAIL\033[0m: Pushed recurrence_group_id not written to MySQL (Got: '$val').\n";
+            $success = false;
+        }
+    } else {
+        echo "[ST-SYNC-04-A] \033[31mFAIL\033[0m: Push returned invalid JSON: " . $res . "\n";
+        $success = false;
+    }
+} else {
+    echo "[ST-SYNC-04-A] \033[31mFAIL\033[0m: Push returned HTTP Code $httpCode\n";
     $success = false;
 }
 

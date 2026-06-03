@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS `schedules` (
   `category` TEXT NOT NULL DEFAULT 'general',
   `is_public` INTEGER NOT NULL DEFAULT 0,
   `discord_webhook_id` TEXT DEFAULT NULL,
+  `recurrence_group_id` TEXT DEFAULT NULL,
   `created_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   `updated_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   `is_deleted` INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +47,20 @@ CREATE TABLE IF NOT EXISTS `schedules` (
 CREATE TABLE IF NOT EXISTS `sync_metadata` (
   `key` TEXT NOT NULL PRIMARY KEY,
   `value` TEXT NOT NULL
+);
+
+-- 5. schedule_allocations テーブル (予定・タスクの日別作業時間配分)
+CREATE TABLE IF NOT EXISTS `schedule_allocations` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `schedule_id` TEXT NOT NULL,
+  `date` TEXT NOT NULL,
+  `time_slot_id` TEXT NOT NULL,
+  `allocated_hours` REAL NOT NULL DEFAULT 0.0,
+  `created_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  `updated_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  `is_deleted` INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE
 );
 
 -- 初期データの登録 (最終同期時刻の初期化)

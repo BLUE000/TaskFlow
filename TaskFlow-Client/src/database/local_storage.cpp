@@ -13,7 +13,7 @@ QList<Schedule> LocalStorage::getAllSchedules(bool includeDeleted) {
     QSqlDatabase db = DBManager::instance().database();
     QSqlQuery query(db);
 
-    QString sql = "SELECT id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at FROM schedules";
+    QString sql = "SELECT id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at, recurrence_group_id FROM schedules";
     if (!includeDeleted) {
         sql += " WHERE is_deleted = 0";
     }
@@ -47,6 +47,7 @@ QList<Schedule> LocalStorage::getAllSchedules(bool includeDeleted) {
         sched.is_public = query.value(10).toInt() != 0;
         sched.is_deleted = query.value(11).toInt() != 0;
         sched.updated_at = QDateTime::fromString(query.value(12).toString(), "yyyy-MM-dd HH:mm:ss");
+        sched.recurrence_group_id = query.value(13).toString();
 
         list.append(sched);
     }
@@ -57,7 +58,7 @@ Schedule LocalStorage::getScheduleById(const QString& id) {
     Schedule sched;
     QSqlDatabase db = DBManager::instance().database();
     QSqlQuery query(db);
-    query.prepare("SELECT id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at FROM schedules WHERE id = :id");
+    query.prepare("SELECT id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at, recurrence_group_id FROM schedules WHERE id = :id");
     query.bindValue(":id", id);
 
     if (!query.exec() || !query.next()) {
@@ -84,6 +85,7 @@ Schedule LocalStorage::getScheduleById(const QString& id) {
     sched.is_public = query.value(10).toInt() != 0;
     sched.is_deleted = query.value(11).toInt() != 0;
     sched.updated_at = QDateTime::fromString(query.value(12).toString(), "yyyy-MM-dd HH:mm:ss");
+    sched.recurrence_group_id = query.value(13).toString();
 
     return sched;
 }
@@ -104,8 +106,8 @@ bool LocalStorage::saveSchedule(const Schedule& sched) {
     }
 
     query.prepare(
-        "INSERT INTO schedules (id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at) "
-        "VALUES (:id, :title, :description, :type, :start_at, :end_at, :status, :priority, :weight, :time_slot_id, :is_public, :is_deleted, :updated_at) "
+        "INSERT INTO schedules (id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at, recurrence_group_id) "
+        "VALUES (:id, :title, :description, :type, :start_at, :end_at, :status, :priority, :weight, :time_slot_id, :is_public, :is_deleted, :updated_at, :recurrence_group_id) "
         "ON CONFLICT(id) DO UPDATE SET "
         "  title = excluded.title, "
         "  description = excluded.description, "
@@ -118,7 +120,8 @@ bool LocalStorage::saveSchedule(const Schedule& sched) {
         "  time_slot_id = excluded.time_slot_id, "
         "  is_public = excluded.is_public, "
         "  is_deleted = excluded.is_deleted, "
-        "  updated_at = excluded.updated_at"
+        "  updated_at = excluded.updated_at, "
+        "  recurrence_group_id = excluded.recurrence_group_id"
     );
 
     query.bindValue(":id", sched.id);
@@ -134,6 +137,7 @@ bool LocalStorage::saveSchedule(const Schedule& sched) {
     query.bindValue(":is_public", sched.is_public ? 1 : 0);
     query.bindValue(":is_deleted", sched.is_deleted ? 1 : 0);
     query.bindValue(":updated_at", sched.updated_at.isValid() ? sched.updated_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    query.bindValue(":recurrence_group_id", sched.recurrence_group_id.isEmpty() ? QVariant(QMetaType(QMetaType::QString)) : sched.recurrence_group_id);
 
     if (!query.exec()) {
         qCritical() << "Failed to save schedule:" << query.lastError().text();

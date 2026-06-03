@@ -104,14 +104,32 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
     try {
         if ($form_action === 'save_schedule') {
             // 新規または編集保存
+            $is_new = empty($_POST['id']);
             $id = $_POST['id'] ?: generate_uuidv4();
+
+            // 既存の recurrence_group_id を取得
+            $existing_group_id = null;
+            if (!$is_new) {
+                $checkSql = "SELECT recurrence_group_id FROM schedules WHERE id = :id";
+                $checkStmt = $db->prepare($checkSql);
+                $checkStmt->execute([':id' => $id]);
+                $existing_group_id = $checkStmt->fetchColumn() ?: null;
+            }
+
+            $recurrence_mode = $_POST['recurrence_mode'] ?? 'single';
+            $type = $_POST['type'] ?? 'simple';
+
+            // 日時は memo タイプなら強制 null
+            $start_at = ($type === 'memo') ? null : ($_POST['start_at'] ?: null);
+            $end_at = ($type === 'memo') ? null : ($_POST['end_at'] ?: null);
+
             $schedule = [
                 'id' => $id,
                 'title' => $_POST['title'] ?? '',
                 'description' => $_POST['description'] ?? '',
-                'type' => $_POST['type'] ?? 'simple',
-                'start_at' => $_POST['start_at'] ?: null,
-                'end_at' => $_POST['end_at'] ?: null,
+                'type' => $type,
+                'start_at' => $start_at,
+                'end_at' => $end_at,
                 'status' => $_POST['status'] ?? 'todo',
                 'priority' => (int)($_POST['priority'] ?? 0),
                 'weight' => (double)($_POST['weight'] ?? 0.0),
@@ -119,12 +137,113 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 'category' => $_POST['category'] ?? 'general',
                 'is_public' => isset($_POST['is_public']) ? 1 : 0,
                 'discord_webhook_id' => $_POST['discord_webhook_id'] ?: null,
+                'recurrence_group_id' => $existing_group_id,
                 'is_deleted' => 0
             ];
 
-            if ($scheduleRepo->save($schedule)) {
+            // 日別作業時間配分データの取得
+            $allocations = [];
+            if ($schedule['type'] === 'task' && !empty($_POST['allocations']) && is_array($_POST['allocations'])) {
+                foreach ($_POST['allocations'] as $date => $slots) {
+                    foreach ($slots as $slotId => $hours) {
+                        $hours = (double)$hours;
+                        if ($hours > 0.0) {
+                            $allocations[] = [
+                                'id' => '', // リポジトリ側で生成
+                                'date' => $date,
+                                'time_slot_id' => $slotId,
+                                'allocated_hours' => $hours
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // 繰り返し設定 (新規登録時のみ有効)
+            $recurrence = $_POST['recurrence'] ?? 'none';
+            $save_success = false;
+
+            if (!$is_new && $recurrence_mode === 'series' && !empty($existing_group_id)) {
+                // シリーズ全体を更新
+                $save_success = $scheduleRepo->updateSeries($existing_group_id, $schedule);
+                // 現在の選択予定（固有の日付などを持つ）も更新
+                $scheduleRepo->save($schedule, $allocations);
+            } else {
+                // 新規またはこの予定のみ
+                if (!$is_new && $recurrence_mode === 'single') {
+                    // シリーズから切り離す
+                    $schedule['recurrence_group_id'] = null;
+                }
+
+                // 新規登録で繰り返しが設定されている場合
+                if ($is_new && $recurrence !== 'none' && $type !== 'task' && $type !== 'memo' && !empty($schedule['start_at']) && !empty($schedule['end_at'])) {
+                    $recurrence_group_id = generate_uuidv4();
+                    $schedule['recurrence_group_id'] = $recurrence_group_id;
+
+                    // オリジナルを保存
+                    $save_success = $scheduleRepo->save($schedule, $allocations);
+
+                    if ($save_success) {
+                        // コピーを生成
+                        try {
+                            $start_dt = str_replace('T', ' ', $schedule['start_at']);
+                            $end_dt = str_replace('T', ' ', $schedule['end_at']);
+                            $startDateObj = new DateTime($start_dt);
+                            $endDateObj = new DateTime($end_dt);
+                            $interval = $startDateObj->diff($endDateObj);
+
+                            $endOfMonth = new DateTime($startDateObj->format('Y-m-t 23:59:59'));
+                            $currentDate = clone $startDateObj;
+                            $currentDate->modify('+1 day');
+
+                            while ($currentDate <= $endOfMonth) {
+                                $dStr = $currentDate->format('Y-m-d');
+                                $w = (int)$currentDate->format('w');
+                                $orig_w = (int)$startDateObj->format('w');
+
+                                $match = false;
+                                if ($recurrence === 'daily') {
+                                    $match = true;
+                                } elseif ($recurrence === 'weekly') {
+                                    if ($w === $orig_w) {
+                                        $match = true;
+                                    }
+                                } elseif ($recurrence === 'weekdays') {
+                                    if ($w >= 1 && $w <= 5) {
+                                        $match = true;
+                                    }
+                                }
+
+                                if ($match) {
+                                    $copy_start = $dStr . ' ' . $startDateObj->format('H:i:s');
+                                    $copy_start_obj = new DateTime($copy_start);
+                                    $copy_end_obj = clone $copy_start_obj;
+                                    $copy_end_obj->add($interval);
+                                    $copy_end = $copy_end_obj->format('Y-m-d H:i:s');
+
+                                    $copy_schedule = $schedule;
+                                    $copy_schedule['id'] = generate_uuidv4();
+                                    $copy_schedule['start_at'] = $copy_start;
+                                    $copy_schedule['end_at'] = $copy_end;
+                                    $copy_schedule['recurrence_group_id'] = $recurrence_group_id;
+
+                                    $scheduleRepo->save($copy_schedule, []); // コピーには日別配分を引き継がない
+                                }
+                                $currentDate->modify('+1 day');
+                            }
+                        } catch (\Exception $e) {
+                            error_log("Failed to generate recurring copies: " . $e->getMessage());
+                        }
+                    }
+                } else {
+                    // 通常の単一保存
+                    $save_success = $scheduleRepo->save($schedule, $allocations);
+                }
+            }
+
+            if ($save_success) {
                 $message = "予定を保存しました。";
-                
+
                 // Discord通知の送信処理
                 if (!empty($schedule['discord_webhook_id'])) {
                     $whSql = "SELECT * FROM webhooks WHERE id = :id AND is_deleted = 0";
@@ -146,14 +265,41 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
         } elseif ($form_action === 'delete_schedule') {
             // 論理削除
             $id = $_POST['id'] ?? '';
+            $recurrence_mode = $_POST['recurrence_mode'] ?? 'single';
+
             if ($id) {
-                // schedules レコードを取得して、is_deleted = 1 にして保存
-                $sql = "UPDATE schedules SET is_deleted = 1, updated_at = NOW() WHERE id = :id";
-                $stmt = $db->prepare($sql);
-                if ($stmt->execute([':id' => $id])) {
-                    $message = "予定を削除しました。";
+                if ($recurrence_mode === 'series') {
+                    // シリーズ全体を削除
+                    $checkSql = "SELECT recurrence_group_id FROM schedules WHERE id = :id";
+                    $checkStmt = $db->prepare($checkSql);
+                    $checkStmt->execute([':id' => $id]);
+                    $group_id = $checkStmt->fetchColumn();
+
+                    if (!empty($group_id)) {
+                        if ($scheduleRepo->deleteSeries($group_id)) {
+                            $message = "シリーズ予定全体を削除しました。";
+                        } else {
+                            $error = "シリーズ予定の削除に失敗しました。";
+                        }
+                    } else {
+                        // グループIDがない場合は単一削除
+                        $sql = "UPDATE schedules SET is_deleted = 1, updated_at = NOW() WHERE id = :id";
+                        $stmt = $db->prepare($sql);
+                        if ($stmt->execute([':id' => $id])) {
+                            $message = "予定を削除しました。";
+                        } else {
+                            $error = "予定の削除に失敗しました。";
+                        }
+                    }
                 } else {
-                    $error = "予定の削除に失敗しました。";
+                    // 単一削除
+                    $sql = "UPDATE schedules SET is_deleted = 1, updated_at = NOW() WHERE id = :id";
+                    $stmt = $db->prepare($sql);
+                    if ($stmt->execute([':id' => $id])) {
+                        $message = "予定を削除しました。";
+                    } else {
+                        $error = "予定の削除に失敗しました。";
+                    }
                 }
             }
         } elseif ($form_action === 'bulk_public') {
@@ -202,9 +348,9 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             if (!isset($_FILES['holiday_csv']) || $_FILES['holiday_csv']['error'] !== UPLOAD_ERR_OK) {
                 throw new RuntimeException("ファイルのアップロードに失敗しました。");
             }
-            
+
             $tempPath = $_FILES['holiday_csv']['tmp_name'];
-            
+
             // 安全な拡張子チェック
             $pathInfo = pathinfo($_FILES['holiday_csv']['name']);
             if (strtolower($pathInfo['extension'] ?? '') !== 'csv') {
@@ -213,11 +359,10 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
 
             // HolidayParser でパースできるかテスト (パース失敗時は例外が飛ぶ)
             $parsedHolidays = HolidayParser::parse($tempPath);
-            
+
             // パースに成功したら、固定の一時パス (data/syukujitsu.csv) に上書き保存
             $destPath = __DIR__ . '/../data/syukujitsu.csv';
-            
-            // $_FILES['holiday_csv']['tmp_name'] は require/include 等で直接ロードしないため安全
+
             if (move_uploaded_file($tempPath, $destPath)) {
                 $message = "祝日CSVをアップロードし、" . count($parsedHolidays) . " 件の祝日データを正常に反映しました。";
             } else {
@@ -253,7 +398,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             }
 
             $newHash = password_hash($new_pw, PASSWORD_BCRYPT);
-            
+
             // 安全な固定文字列置換（定数定義の行を特定して書き換え）
             $oldLine = "define('ADMIN_PASSWORD_HASH', '" . ADMIN_PASSWORD_HASH . "');";
             $newLine = "define('ADMIN_PASSWORD_HASH', '" . $newHash . "');";
@@ -572,6 +717,28 @@ function h(string $str): string {
         .badge-public { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
         .badge-private { background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3); }
         .badge-deleted { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+        /* アコーディオン機能用スタイル */
+        .accordion-header {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            user-select: none;
+            transition: var(--transition-smooth);
+        }
+        .accordion-header:hover {
+            color: var(--accent-blue);
+        }
+        .accordion-icon {
+            display: inline-block;
+            transition: transform 0.2s ease;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+        .accordion-header:hover .accordion-icon {
+            color: var(--accent-blue);
+        }
     </style>
 </head>
 <body>
@@ -655,8 +822,9 @@ function h(string $str): string {
                                         <option value="simple">簡易予定 (simple)</option>
                                         <option value="period">期間予定 (period)</option>
                                         <option value="task">個人タスク (task)</option>
+                                        <option value="memo">やることメモ (memo)</option>
                                     </select>
-                                    <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 簡易予定：日時のみのシンプルな予定。期間予定：複数日にまたがる予定。個人タスク：時間枠に割り当て、重み（所要時間）を集計する進捗管理用の予定。</p>
+                                    <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 簡易予定：日時のみのシンプルな予定。期間予定：複数日にまたがる予定。個人タスク：時間枠に割り当て、重み（所要時間）を集計する進捗管理用の予定。やることメモ：日付のないTo-Doリスト項目。</p>
                                 </div>
                                 <div class="form-group">
                                     <label for="sched-category">カテゴリ/タグ</label>
@@ -665,15 +833,43 @@ function h(string $str): string {
                                 </div>
                             </div>
 
-                            <div class="form-row">
+                            <div class="form-row" id="sched-date-fields">
                                 <div class="form-group">
                                     <label for="sched-start">開始日時</label>
-                                    <input type="datetime-local" id="sched-start" name="start_at">
+                                    <input type="datetime-local" id="sched-start" name="start_at" onchange="updateAllocationForm()">
                                 </div>
                                 <div class="form-group">
                                     <label for="sched-end">終了日時</label>
-                                    <input type="datetime-local" id="sched-end" name="end_at">
+                                    <input type="datetime-local" id="sched-end" name="end_at" onchange="updateAllocationForm()">
                                 </div>
+                            </div>
+
+                            <!-- 繰り返し設定 (新規登録時のみ有効) -->
+                            <div class="form-group" id="recurrence-field" style="margin-top: 1rem; display: none;">
+                                <label for="sched-recurrence">繰り返し設定 (同月内月末までコピー)</label>
+                                <select id="sched-recurrence" name="recurrence">
+                                    <option value="none">なし (none)</option>
+                                    <option value="daily">毎日 (daily)</option>
+                                    <option value="weekly">毎週同じ曜日 (weekly)</option>
+                                    <option value="weekdays">平日のみ (weekdays)</option>
+                                </select>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 新規予定登録時のみ有効（個人タスク・メモは対象外）。開始日の翌日から同月月末まで自動コピーを生成します。</p>
+                            </div>
+
+                            <!-- 繰り返し編集スコープ選択 -->
+                            <div class="form-group" id="edit-scope-field" style="margin-top: 1rem; display: none;">
+                                <label>編集の対象範囲</label>
+                                <div style="display: flex; gap: 1.5rem; margin-top: 0.25rem;">
+                                    <label class="toggle-container" style="font-weight: normal;">
+                                        <input type="radio" name="recurrence_mode" id="scope-single" value="single" checked style="width: 16px; height: 16px;">
+                                        この予定のみ変更
+                                    </label>
+                                    <label class="toggle-container" style="font-weight: normal;">
+                                        <input type="radio" name="recurrence_mode" id="scope-series" value="series" style="width: 16px; height: 16px;">
+                                        シリーズ全体を変更
+                                    </label>
+                                </div>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 「シリーズ全体を変更」を選択すると、同じグループのすべての予定のタイトルや詳細などが一括で更新されます（各予定の日付は維持されます）。</p>
                             </div>
 
                             <!-- タスク専用フィールド -->
@@ -689,13 +885,13 @@ function h(string $str): string {
                                     </div>
                                     <div class="form-group">
                                         <label for="sched-weight">重み (所要時間・時間単位)</label>
-                                        <input type="number" id="sched-weight" name="weight" step="0.5" min="0" value="0">
+                                        <input type="number" id="sched-weight" name="weight" step="0.5" min="0" value="0" onchange="updateAllocationForm()">
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="sched-timeslot">割り当て時間枠</label>
-                                        <select id="sched-timeslot" name="time_slot_id">
+                                        <select id="sched-timeslot" name="time_slot_id" onchange="updateAllocationForm()">
                                             <option value="">(未選択)</option>
                                             <?php foreach ($allTimeSlots as $slot): ?>
                                                 <option value="<?php echo h($slot['id']); ?>"><?php echo h($slot['name']); ?></option>
@@ -714,6 +910,15 @@ function h(string $str): string {
                                 </div>
                             </div>
 
+                            <!-- 日別作業時間配分フォーム -->
+                            <div id="allocation-fields" style="display: none; border-top: 1px dashed var(--panel-border); padding-top: 1rem; margin-top: 1rem;">
+                                <label style="margin-bottom: 0.5rem; display:block;">日別作業時間配分</label>
+                                <div id="allocation-table-wrapper" style="overflow-x: auto;">
+                                    <!-- JavaScript で動的にテーブルを生成 -->
+                                </div>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.4;">※ 期間タスクの場合、日付と時間枠ごとに作業時間を個別に割り当てます（単位：時間）。合計が全体の重みと一致しなくても保存可能です。</p>
+                            </div>
+
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
                                 <div class="toggle-container">
                                     <input type="checkbox" id="sched-public" name="is_public" class="toggle-input" checked>
@@ -727,8 +932,11 @@ function h(string $str): string {
                         </form>
 
                         <!-- 一覧リスト -->
-                        <div style="font-weight:700; margin-bottom:1rem; font-size:1rem;">登録済みの予定一覧 (削除済除く)</div>
-                        <div style="overflow-x:auto;">
+                        <div class="accordion-header" style="font-weight:700; margin-bottom:1rem; font-size:1rem;" onclick="toggleSectionVisibility('active-schedules-container', 'active-schedules-toggle-icon')">
+                            <span>登録済みの予定一覧 (削除済除く)</span>
+                            <span id="active-schedules-toggle-icon" class="accordion-icon">▼</span>
+                        </div>
+                        <div id="active-schedules-container" style="overflow-x:auto;">
                             <table>
                                 <thead>
                                     <tr>
@@ -742,7 +950,7 @@ function h(string $str): string {
                                 </thead>
                                 <tbody>
                                     <?php 
-                                    $activeScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted']; });
+                                    $activeScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted'] && $s['type'] !== 'memo'; });
                                     if (empty($activeScheds)): 
                                     ?>
                                         <tr>
@@ -773,7 +981,69 @@ function h(string $str): string {
                                                 </td>
                                                 <td>
                                                     <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem; margin-right:0.25rem;" onclick='editSchedule(<?php echo json_encode($s, JSON_UNESCAPED_UNICODE); ?>)'>編集</button>
+                                                    <?php if (!empty($s['recurrence_group_id'])): ?>
+                                                    <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirmDeleteSeries(this);">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                                                        <input type="hidden" name="form_action" value="delete_schedule">
+                                                        <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
+                                                        <input type="hidden" name="recurrence_mode" value="single">
+                                                        <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
+                                                    </form>
+                                                    <?php else: ?>
                                                     <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirm('本当にこの予定を削除しますか？');">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                                                        <input type="hidden" name="form_action" value="delete_schedule">
+                                                        <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
+                                                        <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
+                                                    </form>
+                                                    <?php endif; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- やることメモ一覧リスト -->
+                        <div class="accordion-header" style="font-weight:700; margin-top: 2rem; margin-bottom:1rem; font-size:1rem;" onclick="toggleSectionVisibility('memo-schedules-container', 'memo-schedules-toggle-icon')">
+                            <span>やることメモ一覧 (日付未定)</span>
+                            <span id="memo-schedules-toggle-icon" class="accordion-icon">▼</span>
+                        </div>
+                        <div id="memo-schedules-container" style="overflow-x:auto; margin-bottom: 2rem;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>タイトル</th>
+                                        <th>詳細</th>
+                                        <th>カテゴリ</th>
+                                        <th>公開状態</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php 
+                                    $memoScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted'] && $s['type'] === 'memo'; });
+                                    if (empty($memoScheds)): 
+                                    ?>
+                                        <tr>
+                                            <td colspan="5" style="text-align:center; color:var(--text-secondary);">やることメモが登録されていません。</td>
+                                        </tr>
+                                    <?php else: ?>
+                                        <?php foreach ($memoScheds as $s): ?>
+                                            <tr>
+                                                <td style="font-weight:600;"><?php echo h($s['title']); ?></td>
+                                                <td><?php echo h($s['description']); ?></td>
+                                                <td><?php echo h($s['category']); ?></td>
+                                                <td>
+                                                    <span class="badge <?php echo $s['is_public'] ? 'badge-public' : 'badge-private'; ?>">
+                                                        <?php echo $s['is_public'] ? '公開' : '非公開'; ?>
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem; margin-right:0.25rem;" onclick='editSchedule(<?php echo json_encode($s, JSON_UNESCAPED_UNICODE); ?>)'>編集</button>
+                                                    <button type="button" class="btn" style="padding:0.25rem 0.5rem; font-size:0.75rem; margin-right:0.25rem; background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));" onclick='migrateMemoToSchedule(<?php echo json_encode($s, JSON_UNESCAPED_UNICODE); ?>)'>予定/タスクに移行</button>
+                                                    <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirm('本当にこのメモを削除しますか？');">
                                                         <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
                                                         <input type="hidden" name="form_action" value="delete_schedule">
                                                         <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
@@ -1039,6 +1309,24 @@ function h(string $str): string {
     </div>
 
     <script>
+        const timeSlots = <?php echo json_encode($allTimeSlots); ?>;
+        let currentAllocations = {}; // { "YYYY-MM-DD": { "slot_id": hours } }
+
+        // セクション内のアコーディオン開閉
+        function toggleSectionVisibility(containerId, iconId) {
+            const container = document.getElementById(containerId);
+            const icon = document.getElementById(iconId);
+            if (!container || !icon) return;
+
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+                icon.style.transform = 'rotate(0deg)';
+            } else {
+                container.style.display = 'none';
+                icon.style.transform = 'rotate(-90deg)';
+            }
+        }
+
         // セクションの切り替え
         function showSection(element, sectionId) {
             document.querySelectorAll('.panel-section').forEach(sec => sec.classList.remove('active'));
@@ -1050,21 +1338,134 @@ function h(string $str): string {
             element.classList.add('active');
         }
 
-        // 予定フォーム項目の表示制御 (タスク選択時のみ専用項目を表示)
+        // 予定フォーム項目の表示制御 (タスク選択時のみ専用項目を表示、新規かつタスク・メモ外のみ繰り返し設定表示、メモ時は日付非表示)
         function toggleFormFields() {
+            const id = document.getElementById('sched-id').value;
             const type = document.getElementById('sched-type').value;
             const taskFields = document.getElementById('task-fields');
+            const recurrenceField = document.getElementById('recurrence-field');
+            const dateFields = document.getElementById('sched-date-fields');
+            
             if (type === 'task') {
                 taskFields.style.display = 'block';
             } else {
                 taskFields.style.display = 'none';
             }
+            
+            // メモの場合は日付指定行を非表示にする
+            if (type === 'memo') {
+                dateFields.style.display = 'none';
+            } else {
+                dateFields.style.display = 'flex';
+            }
+            
+            // 新規登録かつタスク・メモ以外の場合のみ繰り返しプルダウンを表示
+            if (!id && type !== 'task' && type !== 'memo') {
+                recurrenceField.style.display = 'block';
+            } else {
+                recurrenceField.style.display = 'none';
+            }
+            
+            updateAllocationForm();
         }
 
         // 一括選択チェックボックスのトグル
         function toggleSelectAll(master) {
             const checkboxes = document.querySelectorAll('.bulk-checkbox');
             checkboxes.forEach(cb => cb.checked = master.checked);
+        }
+
+        // 日付範囲の算出
+        function getDateRange(startStr, endStr) {
+            if (!startStr || !endStr) return [];
+            const start = new Date(startStr.substring(0, 10));
+            const end = new Date(endStr.substring(0, 10));
+            const dates = [];
+            let current = new Date(start);
+            while (current <= end) {
+                dates.push(current.toISOString().substring(0, 10));
+                current.setDate(current.getDate() + 1);
+            }
+            return dates;
+        }
+
+        // 日別作業時間配分フォームの動的生成
+        function updateAllocationForm() {
+            const type = document.getElementById('sched-type').value;
+            const startAt = document.getElementById('sched-start').value;
+            const endAt = document.getElementById('sched-end').value;
+            
+            const allocFields = document.getElementById('allocation-fields');
+            const wrapper = document.getElementById('allocation-table-wrapper');
+            
+            if (type !== 'task' || !startAt || !endAt) {
+                allocFields.style.display = 'none';
+                wrapper.innerHTML = '';
+                return;
+            }
+
+            const dates = getDateRange(startAt, endAt);
+            if (dates.length === 0) {
+                allocFields.style.display = 'none';
+                wrapper.innerHTML = '';
+                return;
+            }
+
+            allocFields.style.display = 'block';
+
+            if (timeSlots.length === 0) {
+                wrapper.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.85rem;">※ 設定済みの時間枠がありません。先に時間枠を設定してください。</div>';
+                return;
+            }
+
+            // テーブルヘッダーの構築
+            let html = '<table style="margin-bottom:0; font-size:0.8rem;"><thead><tr><th>日付</th>';
+            timeSlots.forEach(slot => {
+                html += `<th>${escapeHtml(slot.name)} (${slot.start_time.substring(0,5)}-${slot.end_time.substring(0,5)})</th>`;
+            });
+            html += '</tr></thead><tbody>';
+
+            // 各日ごとの入力行の構築
+            dates.forEach(date => {
+                html += `<tr><td style="font-weight:600; white-space:nowrap;">${date}</td>`;
+                timeSlots.forEach(slot => {
+                    let val = '';
+                    if (currentAllocations && currentAllocations[date] && currentAllocations[date][slot.id] !== undefined) {
+                        val = currentAllocations[date][slot.id];
+                    }
+                    html += `<td><input type="number" name="allocations[${date}][${slot.id}]" step="0.5" min="0" value="${val}" style="padding:0.25rem 0.5rem; width:80px; text-align:right;"></td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            wrapper.innerHTML = html;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // 繰り返し予定削除時の確認ダイアログ
+        function confirmDeleteSeries(form) {
+            const res = confirm("この予定は繰り返しグループに属しています。\n\n「OK」を押すとシリーズ（グループ）全体を削除します。\n「キャンセル」を押すとこの予定のみ削除します。");
+            if (res) {
+                form.recurrence_mode.value = "series";
+            } else {
+                form.recurrence_mode.value = "single";
+                if (!confirm("本当にこの予定のみ削除しますか？")) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // やることメモを予定またはタスクへ移行するUIアクション
+        function migrateMemoToSchedule(sched) {
+            editSchedule(sched);
+            document.getElementById('sched-type').value = 'simple';
+            toggleFormFields();
+            document.getElementById('sched-start').focus();
         }
 
         // 予定編集用のデータロード
@@ -1076,11 +1477,30 @@ function h(string $str): string {
             document.getElementById('sched-type').value = sched.type;
             document.getElementById('sched-category').value = sched.category;
             
-            // 日時フォーマット (YYYY-MM-DDTHH:MM) に合わせる
-            document.getElementById('sched-start').value = sched.start_at ? sched.start_at.substring(0, 16).replace(' ', 'T') : '';
-            document.getElementById('sched-end').value = sched.end_at ? sched.end_at.substring(0, 16).replace(' ', 'T') : '';
+            // 日時フォーマット (YYYY-MM-DDTHH:MM) に合わせる (memoタイプは空にする)
+            if (sched.type === 'memo') {
+                document.getElementById('sched-start').value = '';
+                document.getElementById('sched-end').value = '';
+            } else {
+                document.getElementById('sched-start').value = sched.start_at ? sched.start_at.substring(0, 16).replace(' ', 'T') : '';
+                document.getElementById('sched-end').value = sched.end_at ? sched.end_at.substring(0, 16).replace(' ', 'T') : '';
+            }
             
             document.getElementById('sched-public').checked = parseInt(sched.is_public) === 1;
+
+            // allocations データのロード
+            currentAllocations = {};
+            if (sched.allocations && Array.isArray(sched.allocations)) {
+                sched.allocations.forEach(alloc => {
+                    const date = alloc.date;
+                    const slotId = alloc.time_slot_id;
+                    const hours = alloc.allocated_hours;
+                    if (!currentAllocations[date]) {
+                        currentAllocations[date] = {};
+                    }
+                    currentAllocations[date][slotId] = hours;
+                });
+            }
 
             if (sched.type === 'task') {
                 document.getElementById('sched-status').value = sched.status || 'todo';
@@ -1092,6 +1512,15 @@ function h(string $str): string {
                 document.getElementById('sched-weight').value = 0;
                 document.getElementById('sched-timeslot').value = '';
                 document.getElementById('sched-webhook').value = '';
+            }
+
+            // 繰り返し編集スコープの表示制御
+            const editScopeField = document.getElementById('edit-scope-field');
+            if (sched.recurrence_group_id) {
+                editScopeField.style.display = 'block';
+                document.getElementById('scope-single').checked = true;
+            } else {
+                editScopeField.style.display = 'none';
             }
 
             toggleFormFields();
@@ -1114,6 +1543,10 @@ function h(string $str): string {
             document.getElementById('sched-timeslot').value = '';
             document.getElementById('sched-webhook').value = '';
             document.getElementById('sched-public').checked = true;
+            
+            currentAllocations = {};
+            document.getElementById('edit-scope-field').style.display = 'none';
+            
             toggleFormFields();
         }
 
@@ -1141,6 +1574,7 @@ function h(string $str): string {
             document.getElementById('wh-url').value = wh.url;
         }
 
+        // Webhookクリア
         function clearWebhookForm() {
             document.getElementById('wh-id').value = '';
             document.getElementById('wh-name').value = '';

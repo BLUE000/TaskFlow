@@ -73,6 +73,7 @@ private slots:
         s.is_public = true;
         s.is_deleted = false;
         s.updated_at = QDateTime::currentDateTime();
+        s.recurrence_group_id = "test-group-id-123";
 
         QVERIFY(storage.saveSchedule(s));
 
@@ -80,6 +81,7 @@ private slots:
         QCOMPARE(loaded.title, s.title);
         QCOMPARE(loaded.description, s.description);
         QCOMPARE(loaded.weight, s.weight);
+        QCOMPARE(loaded.recurrence_group_id, s.recurrence_group_id);
 
         QVERIFY(storage.deleteSchedule(s.id));
         Schedule deleted = storage.getScheduleById(s.id);
@@ -181,7 +183,7 @@ private slots:
     void testSyncClientConnection() {
         LocalStorage storage;
         // 正しい設定を保存
-        QVERIFY(storage.setMetadata("api_url", "http://localhost:8000/sync.php"));
+        QVERIFY(storage.setMetadata("api_url", "http://localhost:8888/sync.php"));
         QVERIFY(storage.setMetadata("api_token", "tc_f2d6ccf601dd459b515215fd"));
 
         SyncClient client;
@@ -233,7 +235,7 @@ private slots:
 
         // 同期メタデータを調整して競合判定対象にする
         storage.setLastSyncedAt(QDateTime::fromString("2026-06-03 09:00:00", "yyyy-MM-dd HH:mm:ss"));
-        QVERIFY(storage.setMetadata("api_url", "http://localhost:8000/sync.php"));
+        QVERIFY(storage.setMetadata("api_url", "http://localhost:8888/sync.php"));
         QVERIFY(storage.setMetadata("api_token", "tc_f2d6ccf601dd459b515215fd"));
 
         // 3. SyncEngine を起動

@@ -46,3 +46,13 @@ function get_db_connection(): PDO {
     }
     return $pdo;
 }
+
+// カテゴリごとのカレンダー時間表示設定
+// 設定値: 'none' (非表示), 'start' (開始時間のみ), 'both' (開始・終了両方)
+define('CATEGORY_TIME_DISPLAY', [
+    'work' => 'both',
+    'private' => 'none',
+    'study' => 'start',
+    'meeting' => 'both',
+    'default' => 'start' // 設定がないカテゴリやデフォルトの表示設定
+]);

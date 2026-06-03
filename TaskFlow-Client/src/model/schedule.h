@@ -16,6 +16,7 @@ struct Schedule {
     bool is_public = false;
     bool is_deleted = false;
     QDateTime updated_at;
+    QString recurrence_group_id;
 };
 
 #endif // SCHEDULE_H

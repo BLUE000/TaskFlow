@@ -80,6 +80,7 @@ bool DBManager::initialize(const QString& dbPath) {
         "  category TEXT NOT NULL DEFAULT 'general',"
         "  is_public INTEGER NOT NULL DEFAULT 0,"
         "  discord_webhook_id TEXT DEFAULT NULL,"
+        "  recurrence_group_id TEXT DEFAULT NULL,"
         "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),"
         "  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),"
         "  is_deleted INTEGER NOT NULL DEFAULT 0,"
@@ -90,6 +91,25 @@ bool DBManager::initialize(const QString& dbPath) {
     if (!ok) {
         qCritical() << "Failed to create schedules table:" << query.lastError().text();
         return false;
+    }
+
+    // 既存schedulesテーブルへの recurrence_group_id カラム追加チェック
+    {
+        QSqlQuery checkQuery(m_db);
+        checkQuery.exec("PRAGMA table_info(schedules);");
+        bool hasRecurrenceGroupId = false;
+        while (checkQuery.next()) {
+            if (checkQuery.value("name").toString() == "recurrence_group_id") {
+                hasRecurrenceGroupId = true;
+                break;
+            }
+        }
+        if (!hasRecurrenceGroupId) {
+            QSqlQuery alterQuery(m_db);
+            if (!alterQuery.exec("ALTER TABLE schedules ADD COLUMN recurrence_group_id TEXT;")) {
+                qWarning() << "Failed to add recurrence_group_id column to schedules:" << alterQuery.lastError().text();
+            }
+        }
     }
 
     // 4. sync_metadata テーブル

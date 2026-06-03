@@ -40,10 +40,26 @@ CREATE TABLE IF NOT EXISTS `schedules` (
   `category` VARCHAR(50) NOT NULL DEFAULT 'general',
   `is_public` TINYINT(1) NOT NULL DEFAULT 0,
   `discord_webhook_id` VARCHAR(36) NULL DEFAULT NULL,
+  `recurrence_group_id` VARCHAR(36) NULL DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   CONSTRAINT `fk_schedules_time_slot` FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_schedules_webhook` FOREIGN KEY (`discord_webhook_id`) REFERENCES `webhooks` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 4. schedule_allocations テーブル (予定・タスクの日別作業時間配分)
+CREATE TABLE IF NOT EXISTS `schedule_allocations` (
+  `id` VARCHAR(36) NOT NULL,
+  `schedule_id` VARCHAR(36) NOT NULL,
+  `date` DATE NOT NULL,
+  `time_slot_id` VARCHAR(36) NOT NULL,
+  `allocated_hours` DOUBLE NOT NULL DEFAULT 0.0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `fk_allocations_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_allocations_time_slot` FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

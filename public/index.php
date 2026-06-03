@@ -85,7 +85,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && $_P
 $isAdmin = isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
 
 // データの取得 (管理者の場合は全件、一般ユーザーは公開設定されたもののみ)
-$schedules = $isAdmin ? $scheduleRepo->findAll() : $scheduleRepo->findAllPublic();
+$rawSchedules = $isAdmin ? $scheduleRepo->findAll() : $scheduleRepo->findAllPublic();
+// やることメモ (type = 'memo') は一般画面（カレンダー/週表示/ガントチャート）には表示しない
+$schedules = array_values(array_filter($rawSchedules, function($s) {
+    return $s['type'] !== 'memo';
+}));
 $timeSlots = $timeSlotRepo->findAllActive();
 
 // 祝日データの取得
@@ -276,7 +280,7 @@ function h(string $str): string {
         /* カレンダーグリッド */
         .calendar-grid {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
+            grid-template-columns: repeat(7, minmax(0, 1fr));
             gap: 8px;
         }
 
@@ -354,6 +358,7 @@ function h(string $str): string {
             flex-grow: 1;
             overflow-y: auto;
             max-height: 90px;
+            min-width: 0;
         }
 
         .event-item {
@@ -366,6 +371,8 @@ function h(string $str): string {
             text-overflow: ellipsis;
             cursor: pointer;
             transition: var(--transition-smooth);
+            min-width: 0;
+            max-width: 100%;
         }
 
         .event-item:hover {
@@ -565,7 +572,7 @@ function h(string $str): string {
         @media (max-width: 768px) {
             .app-container { padding: 1rem; }
             header { flex-direction: column; gap: 1rem; align-items: flex-start; }
-            .calendar-grid { grid-template-columns: repeat(7, 1fr); gap: 4px; }
+            .calendar-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
             .calendar-cell { min-height: 80px; padding: 0.25rem; }
             .event-item { font-size: 0.6rem; padding: 1px 2px; }
             .event-list { max-height: 50px; }
@@ -849,6 +856,7 @@ function h(string $str): string {
         const rawSchedules = <?php echo json_encode($schedules, JSON_UNESCAPED_UNICODE); ?>;
         const timeSlots = <?php echo json_encode($timeSlots, JSON_UNESCAPED_UNICODE); ?>;
         const holidays = <?php echo json_encode($holidays, JSON_UNESCAPED_UNICODE); ?>;
+        const categoryTimeDisplay = <?php echo json_encode(CATEGORY_TIME_DISPLAY, JSON_UNESCAPED_UNICODE); ?>;
 
         let currentDate = new Date(2026, 5, 1); // 2026年6月を初期値とする (月は0始まりなので 5=6月)
         let currentView = 'month'; // 'month', 'week', 'gantt'
@@ -1111,18 +1119,37 @@ function h(string $str): string {
 
             // 予定データの集計 (絞り込み済みの予定を使用)
             getFilteredSchedules().forEach(sched => {
-                if (sched.type === 'task' && sched.time_slot_id && sched.status !== 'done') {
-                    // 日付の合致チェック (start_at を YYYY-MM-DD に変換)
-                    if (sched.start_at && sched.start_at.substring(0, 10) === dateStr) {
-                        const slotId = sched.time_slot_id;
-                        if (loadMap[slotId]) {
-                            const w = parseFloat(sched.weight) || 0.0;
-                            loadMap[slotId].current += w;
-                            loadMap[slotId].tasks.push({
-                                title: sched.title,
-                                weight: w,
-                                status: sched.status
-                            });
+                if (sched.type === 'task' && sched.status !== 'done') {
+                    const allocs = sched.allocations || [];
+                    if (allocs.length > 0) {
+                        // 子テーブルのデータ（allocations）から集計
+                        allocs.forEach(alloc => {
+                            if (alloc.date === dateStr) {
+                                const slotId = alloc.time_slot_id;
+                                if (loadMap[slotId]) {
+                                    const hrs = parseFloat(alloc.allocated_hours) || 0.0;
+                                    loadMap[slotId].current += hrs;
+                                    loadMap[slotId].tasks.push({
+                                        title: sched.title,
+                                        weight: hrs,
+                                        status: sched.status
+                                    });
+                                }
+                            }
+                        });
+                    } else {
+                        // 後方互換：単発タスク（allocationsなし）は開始日に全負荷を割り当て
+                        if (sched.start_at && sched.start_at.substring(0, 10) === dateStr) {
+                            const slotId = sched.time_slot_id;
+                            if (slotId && loadMap[slotId]) {
+                                const w = parseFloat(sched.weight) || 0.0;
+                                loadMap[slotId].current += w;
+                                loadMap[slotId].tasks.push({
+                                    title: sched.title,
+                                    weight: w,
+                                    status: sched.status
+                                });
+                            }
                         }
                     }
                 }
@@ -1211,15 +1238,30 @@ function h(string $str): string {
                 
                 // その日の予定をフィルタリングして追加
                 const dailyEvents = getFilteredSchedules().filter(sched => {
-                    if (sched.start_at) {
-                        const sDate = sched.start_at.substring(0, 10);
-                        if (sched.type === 'period' && sched.end_at) {
+                    if (!sched.start_at) return false;
+                    const sDate = sched.start_at.substring(0, 10);
+                    
+                    if (sched.type === 'period' && sched.end_at) {
+                        const eDate = sched.end_at.substring(0, 10);
+                        return dateStr >= sDate && dateStr <= eDate;
+                    }
+                    
+                    if (sched.type === 'task') {
+                        const allocs = sched.allocations || [];
+                        if (allocs.length > 0) {
+                            // allocations が存在する日付セル全てに描画される
+                            return allocs.some(a => a.date === dateStr);
+                        } else if (sched.end_at) {
+                            // 期間が設定されたタスク（allocationsなし）も開始〜終了の全日付枠に連日表示
                             const eDate = sched.end_at.substring(0, 10);
                             return dateStr >= sDate && dateStr <= eDate;
                         }
+                        // 開始日のみ
                         return sDate === dateStr;
                     }
-                    return false;
+                    
+                    // simple予定
+                    return sDate === dateStr;
                 });
 
                 dailyEvents.forEach(event => {
@@ -1241,8 +1283,9 @@ function h(string $str): string {
                         prefix += `<span class="task-weight-dot" style="background:${event.status === 'doing' ? 'var(--accent-orange)' : 'var(--accent-green)'}"></span>`;
                     }
                     
+                    const timeLabel = getEventTimeLabel(event);
                     const displayTitle = isPrivate ? `[非公開] ${event.title}` : event.title;
-                    evItem.innerHTML = `${prefix}${escapeHtml(displayTitle)}`;
+                    evItem.innerHTML = `${prefix}<span class="event-time" style="font-weight:600; margin-right:4px;">${escapeHtml(timeLabel)}</span>${escapeHtml(displayTitle)}`;
                     evItem.addEventListener('click', (e) => {
                         e.stopPropagation();
                         showEventDetail(event, cellDate);
@@ -1358,21 +1401,35 @@ function h(string $str): string {
                 listContainer.style.maxHeight = '240px';
                 
                 const dailyEvents = getFilteredSchedules().filter(sched => {
-                    if (sched.start_at) {
-                        const sDate = sched.start_at.substring(0, 10);
-                        if (sched.type === 'period' && sched.end_at) {
+                    if (!sched.start_at) return false;
+                    const sDate = sched.start_at.substring(0, 10);
+                    
+                    if (sched.type === 'period' && sched.end_at) {
+                        const eDate = sched.end_at.substring(0, 10);
+                        return dateStr >= sDate && dateStr <= eDate;
+                    }
+                    
+                    if (sched.type === 'task') {
+                        const allocs = sched.allocations || [];
+                        if (allocs.length > 0) {
+                            // allocations が存在する日付セル全てに描画される
+                            return allocs.some(a => a.date === dateStr);
+                        } else if (sched.end_at) {
+                            // 期間が設定されたタスク（allocationsなし）も開始〜終了の全日付枠に連日表示
                             const eDate = sched.end_at.substring(0, 10);
                             return dateStr >= sDate && dateStr <= eDate;
                         }
+                        // 開始日のみ
                         return sDate === dateStr;
                     }
-                    return false;
+                    
+                    // simple予定
+                    return sDate === dateStr;
                 });
 
                 dailyEvents.forEach(event => {
                     const evItem = document.createElement('div');
                     evItem.className = `event-item event-${event.type}`;
-                    evItem.style.whiteSpace = 'normal'; // 週表示は折り返し許可
                     
                     const isPrivate = parseInt(event.is_public) === 0;
                     if (isPrivate) {
@@ -1391,8 +1448,9 @@ function h(string $str): string {
                         suffix = ` <span style="opacity:0.6;font-size:0.65rem">(${event.weight}h)</span>`;
                     }
                     
+                    const timeLabel = getEventTimeLabel(event);
                     const displayTitle = isPrivate ? `[非公開] ${event.title}` : event.title;
-                    evItem.innerHTML = `${prefix}${escapeHtml(displayTitle)}${suffix}`;
+                    evItem.innerHTML = `${prefix}<span class="event-time" style="font-weight:600; margin-right:4px;">${escapeHtml(timeLabel)}</span>${escapeHtml(displayTitle)}${suffix}`;
                     evItem.addEventListener('click', (e) => {
                         e.stopPropagation();
                         showEventDetail(event, cellDate);
@@ -1608,9 +1666,25 @@ function h(string $str): string {
             document.getElementById('cell-tooltip').style.display = 'none';
         }
 
-        // 予定クリック時の詳細ダイアログ表示 (簡易版)
+        // 予定クリック時の詳細ダイアログ表示 (詳細版)
         function showEventDetail(event, date) {
-            alert(`【予定詳細】\n\nタイトル: ${event.title}\n種類: ${event.type}\n日付: ${event.start_at}\nステータス: ${event.status || 'なし'}\n重み: ${event.weight || 0}h\nカテゴリ: ${event.category || '一般'}\n詳細メモ: ${event.description || '(なし)'}`);
+            let details = `【予定詳細】\n\nタイトル: ${event.title}\n種類: ${event.type}\n日付: ${event.start_at}`;
+            if (event.end_at) {
+                details += ` 〜 ${event.end_at}`;
+            }
+            details += `\nステータス: ${event.status || 'なし'}\n重み: ${event.weight || 0}h\nカテゴリ: ${event.category || '一般'}`;
+            
+            if (event.type === 'task' && event.allocations && event.allocations.length > 0) {
+                details += `\n\n【日別作業時間配分】`;
+                event.allocations.forEach(a => {
+                    const slot = timeSlots.find(s => s.id === a.time_slot_id);
+                    const slotName = slot ? slot.name : '時間枠不明';
+                    details += `\n・${a.date} [${slotName}]: ${a.allocated_hours}h`;
+                });
+            }
+            
+            details += `\n\n詳細メモ: ${event.description || '(なし)'}`;
+            alert(details);
         }
 
         // 日付オブジェクトを YYYY-MM-DD 形式にフォーマットする
@@ -1630,6 +1704,31 @@ function h(string $str): string {
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#039;');
+        }
+
+        // カテゴリと予定データに基づいて表示時間を整形するヘルパー
+        function getEventTimeLabel(event) {
+            if (!event.start_at) return '';
+            
+            const cat = (event.category || '').trim().toLowerCase();
+            const config = categoryTimeDisplay[cat] || categoryTimeDisplay['default'] || 'start';
+            
+            if (config === 'none') return '';
+            
+            const startTime = event.start_at.substring(11, 16);
+            if (config === 'start') {
+                return startTime + ' ';
+            }
+            
+            if (config === 'both') {
+                const endTime = event.end_at ? event.end_at.substring(11, 16) : '';
+                if (endTime) {
+                    return `${startTime}-${endTime} `;
+                }
+                return startTime + ' ';
+            }
+            
+            return '';
         }
     </script>
 
