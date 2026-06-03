@@ -19,7 +19,7 @@ define('TRANSCIPHER_API_TOKEN', getenv('TRANSCIPHER_API_TOKEN') ?: 'tc_f2d6ccf60
 define('APP_TIMEZONE', 'Asia/Tokyo');
 
 // 管理者ログイン用パスワードハッシュ (パスワード: 'admin123')
-define('ADMIN_PASSWORD_HASH', '$2y$10$tMh4E.x0hYx.9oG0Wb.rUOHaE0h4XJkZ11K63K6O8y/eApt/09d/2');
+define('ADMIN_PASSWORD_HASH', '$2y$10$weUhWtsLLBypHEoX9E26FuxNJChHqNTLZoWKpcw5ZNM1EzK5et5Fq');
 
 // タイムゾーン設定
 date_default_timezone_set(APP_TIMEZONE);
