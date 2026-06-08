@@ -939,6 +939,9 @@ function h(string $str): string {
                                     <!-- JavaScript で動的にテーブルを生成 -->
                                 </div>
                                 <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.4;">※ 期間タスクの場合、日付と時間枠ごとに作業時間を個別に割り当てます（単位：時間）。合計が全体の重みと一致しなくても保存可能です。</p>
+                                <div style="margin-top: 0.5rem;">
+                                    <button type="button" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="addActualDate()">+ 実績日（予定外の作業日）を追加</button>
+                                </div>
                             </div>
 
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
