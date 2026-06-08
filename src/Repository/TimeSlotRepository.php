@@ -73,4 +73,16 @@ class TimeSlotRepository {
         $stmt->execute([':last_synced_at' => $lastSyncedAt]);
         return $stmt->fetchAll();
     }
+
+    /**
+     * 時間枠を論理削除する
+     * 
+     * @param string $id 時間枠ID
+     * @return bool 処理結果
+     */
+    public function delete(string $id): bool {
+        $sql = "UPDATE time_slots SET is_deleted = 1, updated_at = NOW() WHERE id = :id";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':id' => $id]);
+    }
 }

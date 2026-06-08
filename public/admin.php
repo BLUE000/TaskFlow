@@ -329,6 +329,16 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             } else {
                 $error = "時間枠の保存に失敗しました。";
             }
+        } elseif ($form_action === 'delete_timeslot') {
+            // 時間枠削除
+            $id = $_POST['id'] ?? '';
+            if ($id) {
+                if ($timeSlotRepo->delete($id)) {
+                    $message = "時間枠を削除しました。";
+                } else {
+                    $error = "時間枠の削除に失敗しました。";
+                }
+            }
         } elseif ($form_action === 'save_webhook') {
             // Webhook保存
             $id = $_POST['id'] ?: generate_uuidv4();
@@ -1170,6 +1180,12 @@ function h(string $str): string {
                                             <td><?php echo h($ts['limit_hours']); ?> 時間</td>
                                             <td>
                                                 <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem;" onclick='editTimeSlot(<?php echo json_encode($ts, JSON_UNESCAPED_UNICODE); ?>)'>編集</button>
+                                                <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirm('本当にこの時間枠を削除しますか？');">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                                                    <input type="hidden" name="form_action" value="delete_timeslot">
+                                                    <input type="hidden" name="id" value="<?php echo h($ts['id']); ?>">
+                                                    <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
+                                                </form>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
