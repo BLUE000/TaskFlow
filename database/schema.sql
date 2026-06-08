@@ -63,3 +63,15 @@ CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   CONSTRAINT `fk_allocations_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `fk_allocations_time_slot` FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 5. schedule_progress テーブル (予定・タスクの進捗率)
+CREATE TABLE IF NOT EXISTS `schedule_progress` (
+  `schedule_id` VARCHAR(36) NOT NULL,
+  `date` DATE NOT NULL,
+  `progress_percent` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`schedule_id`, `date`),
+  CONSTRAINT `fk_progress_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

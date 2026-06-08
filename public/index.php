@@ -492,6 +492,7 @@ function h(string $str): string {
 
         .gantt-right-panel {
             overflow-x: auto;
+            position: relative;
         }
 
         .gantt-timeline-header {
@@ -560,6 +561,35 @@ function h(string $str): string {
         .gantt-bar.task.doing {
             background: linear-gradient(90deg, var(--accent-orange), #c2410c);
         }
+        .gantt-bar.task.delayed {
+            background: linear-gradient(90deg, var(--alert-red), #b91c1c);
+            border: 1px solid #ef4444;
+        }
+        .gantt-bar.task.ahead {
+            background: linear-gradient(90deg, var(--accent-blue), #0369a1);
+            border: 1px solid #38bdf8;
+        }
+        .gantt-bar.task.onschedule {
+            background: linear-gradient(90deg, var(--accent-green), #047857);
+            border: 1px solid #10b981;
+        }
+
+        /* 予定外の実績前倒し・超過期間の表示スタイル */
+        .gantt-bar.actual-extension {
+            background: transparent !important;
+            border-style: dashed !important;
+            border-width: 1.5px !important;
+            box-shadow: none !important;
+            color: transparent !important;
+            cursor: pointer;
+        }
+        .gantt-bar.actual-extension.early {
+            border-color: var(--accent-blue) !important;
+        }
+        .gantt-bar.actual-extension.late {
+            border-color: var(--alert-red) !important;
+        }
+
 
         /* アニメーション */
         @keyframes pulse {
@@ -1498,6 +1528,10 @@ function h(string $str): string {
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth();
 
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+
             // 対象月の全日付を生成
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const timelineDays = [];
@@ -1557,6 +1591,11 @@ function h(string $str): string {
                 return false;
             });
 
+            const parseLocalDate = (dateStr) => {
+                const parts = dateStr.split('-');
+                return new Date(parts[0], parts[1] - 1, parts[2]);
+            };
+
             if (targetEvents.length === 0) {
                 // 予定がない場合の空表示
                 const emptyRowLeft = document.createElement('div');
@@ -1608,9 +1647,12 @@ function h(string $str): string {
                 const startAtStr = event.start_at.substring(0, 10);
                 const endAtStr = event.end_at ? event.end_at.substring(0, 10) : startAtStr;
 
+                const startDateObj = parseLocalDate(startAtStr);
+                const endDateObj = parseLocalDate(endAtStr);
+
                 // 当月の開始日と終了日からのインデックス（オフセット）算出
-                const startOffset = Math.max(0, Math.ceil((new Date(startAtStr) - timelineDays[0]) / (1000 * 60 * 60 * 24)));
-                const endOffset = Math.min(timelineDays.length - 1, Math.floor((new Date(endAtStr) - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                const startOffset = Math.max(0, Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                const endOffset = Math.min(timelineDays.length - 1, Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
 
                 const durationDays = endOffset - startOffset + 1;
 
@@ -1622,19 +1664,136 @@ function h(string $str): string {
                         bar.classList.add('private-schedule');
                     }
 
-                    if (event.type === 'task') {
-                        bar.classList.add(event.status);
-                    }
-                    
-                    // 配置用座標 (1セル = 40px)
-                    bar.style.left = `${startOffset * 40 + 8}px`;
-                    bar.style.width = `${durationDays * 40 - 16}px`;
-                    
                     const displayTitle = isPrivate ? `🔒 [非公開] ${event.title}` : event.title;
-                    bar.innerText = displayTitle;
+
+                    if (event.type === 'task') {
+                        // Calculate actual progress
+                        let P_total = 0;
+                        if (event.progress && Array.isArray(event.progress)) {
+                            event.progress.forEach(p => {
+                                P_total += parseInt(p.progress_percent || 0, 10);
+                            });
+                        }
+                        P_total = Math.min(100, Math.max(0, P_total));
+
+                        // Calculate planned progress
+                        const P_planned = calculatePlannedProgress(startDateObj, endDateObj, today);
+
+                        if (P_total < P_planned) {
+                            bar.classList.add('delayed');
+                        } else if (P_total > P_planned) {
+                            bar.classList.add('ahead');
+                        } else {
+                            bar.classList.add('onschedule');
+                        }
+
+                        // Determine earliest and latest dates with positive progress or allocation
+                        let actualStartDateObj = null;
+                        let actualEndDateObj = null;
+
+                        if (event.progress && Array.isArray(event.progress)) {
+                            event.progress.forEach(p => {
+                                const pct = parseInt(p.progress_percent || 0, 10);
+                                if (pct > 0) {
+                                    const d = parseLocalDate(p.date);
+                                    if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
+                                    if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
+                                }
+                            });
+                        }
+
+                        if (event.allocations && Array.isArray(event.allocations)) {
+                            event.allocations.forEach(alloc => {
+                                const hours = parseFloat(alloc.allocated_hours || 0);
+                                if (hours > 0) {
+                                    const d = parseLocalDate(alloc.date);
+                                    if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
+                                    if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
+                                }
+                            });
+                        }
+
+                        // If we have an early start actual date before planned start date
+                        if (actualStartDateObj && actualStartDateObj < startDateObj) {
+                            const earlyStartOffset = Math.max(0, Math.round((actualStartDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                            const earlyEndOffset = Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) - 1;
+                            const earlyDurationDays = earlyEndOffset - earlyStartOffset + 1;
+
+                            if (earlyDurationDays > 0) {
+                                const earlyBar = document.createElement('div');
+                                earlyBar.className = 'gantt-bar actual-extension early';
+                                earlyBar.style.left = `${earlyStartOffset * 40 + 8}px`;
+                                earlyBar.style.width = `${earlyDurationDays * 40}px`;
+                                
+                                const earlyStartStr = formatDate(actualStartDateObj);
+                                const dayBeforePlannedStart = new Date(startDateObj.getTime() - (1000 * 60 * 60 * 24));
+                                const earlyEndStr = formatDate(dayBeforePlannedStart);
+                                const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の早期着手期間 (${earlyStartStr} 〜 ${earlyEndStr})`;
+
+                                earlyBar.addEventListener('mouseenter', (e) => {
+                                    showTooltip(e, tooltipMsg);
+                                });
+                                earlyBar.addEventListener('mouseleave', hideTooltip);
+                                earlyBar.addEventListener('click', () => {
+                                    showEventDetail(event, startDateObj);
+                                });
+                                rowBody.appendChild(earlyBar);
+                            }
+                        }
+
+                        // If we have a late finish actual date after planned end date
+                        if (actualEndDateObj && actualEndDateObj > endDateObj) {
+                            const lateStartOffset = Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) + 1;
+                            const lateEndOffset = Math.min(timelineDays.length - 1, Math.round((actualEndDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                            const lateDurationDays = lateEndOffset - lateStartOffset + 1;
+
+                            if (lateDurationDays > 0) {
+                                const lateBar = document.createElement('div');
+                                lateBar.className = 'gantt-bar actual-extension late';
+                                lateBar.style.left = `${(endOffset + 1) * 40 - 8}px`;
+                                lateBar.style.width = `${lateDurationDays * 40}px`;
+
+                                const dayAfterPlannedEnd = new Date(endDateObj.getTime() + (1000 * 60 * 60 * 24));
+                                const lateStartStr = formatDate(dayAfterPlannedEnd);
+                                const lateEndStr = formatDate(actualEndDateObj);
+                                const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の超過期間 (${lateStartStr} 〜 ${lateEndStr})`;
+
+                                lateBar.addEventListener('mouseenter', (e) => {
+                                    showTooltip(e, tooltipMsg);
+                                });
+                                lateBar.addEventListener('mouseleave', hideTooltip);
+                                lateBar.addEventListener('click', () => {
+                                    showEventDetail(event, startDateObj);
+                                });
+                                rowBody.appendChild(lateBar);
+                            }
+                        }
+                    }
+
+                    if (startAtStr === endAtStr) {
+                        // 1日未満（当日のみ）の場合は●（ドット）として配置
+                        bar.style.left = `${startOffset * 40 + 12}px`; // 40pxセルの真ん中に配置 (40-16)/2 = 12px
+                        bar.style.width = '16px';
+                        bar.style.height = '16px';
+                        bar.style.borderRadius = '50%';
+                        bar.style.padding = '0';
+                        bar.style.justifyContent = 'center';
+                        bar.innerText = '';
+                    } else {
+                        // 1日以上の場合は通常のバーとして配置
+                        bar.style.left = `${startOffset * 40 + 8}px`;
+                        bar.style.width = `${durationDays * 40 - 16}px`;
+                        bar.innerText = displayTitle;
+                    }
+
+                    // ホバー時にツールチップでタイトルを表示
+                    bar.addEventListener('mouseenter', (e) => {
+                        showTooltip(e, escapeHtml(displayTitle));
+                    });
+                    bar.addEventListener('mouseleave', hideTooltip);
 
                     bar.addEventListener('click', () => {
-                        showEventDetail(event, new Date(startAtStr));
+                        showEventDetail(event, startDateObj);
                     });
 
                     rowBody.appendChild(bar);
@@ -1643,9 +1802,107 @@ function h(string $str): string {
                 rightPanel.appendChild(rowBody);
             });
 
+            // 稲妻線と本日線のSVG描画 (今年今月のみ)
+            if (isCurrentMonth && targetEvents.length > 0) {
+                const totalHeight = targetEvents.length * 48;
+                const x_today = (today.getDate() - 1) * 40;
+
+                const svgNS = "http://www.w3.org/2000/svg";
+                const svg = document.createElementNS(svgNS, "svg");
+                svg.style.position = 'absolute';
+                svg.style.top = '48px';
+                svg.style.left = '0';
+                svg.style.width = `${daysInMonth * 40}px`;
+                svg.style.height = `${totalHeight}px`;
+                svg.style.pointerEvents = 'none';
+                svg.style.zIndex = '5';
+
+                // 1. 本日線（縦点線）
+                const todayLine = document.createElementNS(svgNS, "line");
+                todayLine.setAttribute("x1", x_today);
+                todayLine.setAttribute("y1", 0);
+                todayLine.setAttribute("x2", x_today);
+                todayLine.setAttribute("y2", totalHeight);
+                todayLine.setAttribute("stroke", "var(--alert-red)");
+                todayLine.setAttribute("stroke-width", "1.5");
+                todayLine.setAttribute("stroke-dasharray", "4,4");
+                svg.appendChild(todayLine);
+
+                // 2. 稲妻線折れ線
+                const points = [];
+                points.push(`${x_today},0`);
+
+                targetEvents.forEach((event, index) => {
+                    const y = index * 48 + 24;
+                    let x = x_today;
+
+                    if (event.type === 'task') {
+                        let P_total = 0;
+                        if (event.progress && Array.isArray(event.progress)) {
+                            event.progress.forEach(p => {
+                                P_total += parseInt(p.progress_percent || 0, 10);
+                            });
+                        }
+                        P_total = Math.min(100, Math.max(0, P_total));
+
+                        const startAtStr = event.start_at.substring(0, 10);
+                        const endAtStr = event.end_at ? event.end_at.substring(0, 10) : startAtStr;
+                        const startDateObj = parseLocalDate(startAtStr);
+                        const endDateObj = parseLocalDate(endAtStr);
+
+                        const actualTotalDays = Math.round((endDateObj - startDateObj) / (1000 * 60 * 60 * 24)) + 1;
+                        const progressDays = (P_total / 100) * actualTotalDays;
+                        const progressDate = new Date(startDateObj.getTime() + progressDays * (1000 * 60 * 60 * 24));
+
+                        const diffTime = progressDate - timelineDays[0];
+                        const diffDays = diffTime / (1000 * 60 * 60 * 24);
+                        x = Math.max(0, Math.min(daysInMonth * 40, diffDays * 40));
+
+                        // 進捗ドット
+                        const circle = document.createElementNS(svgNS, "circle");
+                        circle.setAttribute("cx", x);
+                        circle.setAttribute("cy", y);
+                        circle.setAttribute("r", "4");
+                        circle.setAttribute("fill", "var(--alert-red)");
+                        svg.appendChild(circle);
+                    }
+
+                    points.push(`${x},${y}`);
+                });
+
+                points.push(`${x_today},${totalHeight}`);
+
+                const polyline = document.createElementNS(svgNS, "polyline");
+                polyline.setAttribute("points", points.join(" "));
+                polyline.setAttribute("stroke", "var(--alert-red)");
+                polyline.setAttribute("stroke-width", "2");
+                polyline.setAttribute("fill", "none");
+                svg.appendChild(polyline);
+
+                rightPanel.appendChild(svg);
+            }
+
             ganttGrid.appendChild(leftPanel);
             ganttGrid.appendChild(rightPanel);
             container.appendChild(ganttGrid);
+        }
+
+        // 計画進捗率の算出関数
+        function calculatePlannedProgress(startDateObj, endDateObj, todayDateObj) {
+            const start = new Date(startDateObj.getFullYear(), startDateObj.getMonth(), startDateObj.getDate());
+            const end = new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate());
+            const today = new Date(todayDateObj.getFullYear(), todayDateObj.getMonth(), todayDateObj.getDate());
+
+            const totalDays = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+            
+            if (today < start) {
+                return 0;
+            } else if (today > end) {
+                return 100;
+            } else {
+                const elapsedDays = Math.round((today - start) / (1000 * 60 * 60 * 24));
+                return (elapsedDays / totalDays) * 100;
+            }
         }
 
         // ツールチップ表示

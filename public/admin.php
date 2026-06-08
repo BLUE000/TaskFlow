@@ -159,6 +159,17 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 }
             }
 
+            // 日別進捗率データの取得
+            $progress = [];
+            if ($schedule['type'] === 'task' && !empty($_POST['progress']) && is_array($_POST['progress'])) {
+                foreach ($_POST['progress'] as $date => $pct) {
+                    $pct = (int)$pct;
+                    if ($pct >= 0 && $pct <= 100) {
+                        $progress[$date] = $pct;
+                    }
+                }
+            }
+
             // 繰り返し設定 (新規登録時のみ有効)
             $recurrence = $_POST['recurrence'] ?? 'none';
             $save_success = false;
@@ -167,7 +178,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 // シリーズ全体を更新
                 $save_success = $scheduleRepo->updateSeries($existing_group_id, $schedule);
                 // 現在の選択予定（固有の日付などを持つ）も更新
-                $scheduleRepo->save($schedule, $allocations);
+                $scheduleRepo->save($schedule, $allocations, $progress);
             } else {
                 // 新規またはこの予定のみ
                 if (!$is_new && $recurrence_mode === 'single') {
@@ -181,7 +192,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                     $schedule['recurrence_group_id'] = $recurrence_group_id;
 
                     // オリジナルを保存
-                    $save_success = $scheduleRepo->save($schedule, $allocations);
+                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress);
 
                     if ($save_success) {
                         // コピーを生成
@@ -227,7 +238,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                                     $copy_schedule['end_at'] = $copy_end;
                                     $copy_schedule['recurrence_group_id'] = $recurrence_group_id;
 
-                                    $scheduleRepo->save($copy_schedule, []); // コピーには日別配分を引き継がない
+                                    $scheduleRepo->save($copy_schedule, [], []); // コピーには日別配分・進捗を引き継がない
                                 }
                                 $currentDate->modify('+1 day');
                             }
@@ -237,7 +248,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                     }
                 } else {
                     // 通常の単一保存
-                    $save_success = $scheduleRepo->save($schedule, $allocations);
+                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress);
                 }
             }
 
@@ -887,11 +898,12 @@ function h(string $str): string {
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="sched-status">進捗状況</label>
-                                        <select id="sched-status" name="status">
+                                        <select id="sched-status" name="status" disabled style="opacity: 0.7; cursor: not-allowed;">
                                             <option value="todo">未着手 (todo)</option>
                                             <option value="doing">進行中 (doing)</option>
                                             <option value="done">完了 (done)</option>
                                         </select>
+                                        <input type="hidden" name="status" id="sched-status-hidden" value="todo">
                                     </div>
                                     <div class="form-group">
                                         <label for="sched-weight">重み (所要時間・時間単位)</label>
@@ -1327,6 +1339,7 @@ function h(string $str): string {
     <script>
         const timeSlots = <?php echo json_encode($allTimeSlots); ?>;
         let currentAllocations = {}; // { "YYYY-MM-DD": { "slot_id": hours } }
+        let currentProgress = {}; // { "YYYY-MM-DD": percent }
 
         // セクション内のアコーディオン開閉
         function toggleSectionVisibility(containerId, iconId) {
@@ -1405,6 +1418,69 @@ function h(string $str): string {
             return dates;
         }
 
+        // 日付範囲（予定＋登録済・追加済実績のユニオン）の算出
+        function getDateRangeUnion(startStr, endStr) {
+            const datesSet = new Set();
+            
+            // 1. 予定された期間内の全日付
+            if (startStr && endStr) {
+                const start = new Date(startStr.substring(0, 10));
+                const end = new Date(endStr.substring(0, 10));
+                let current = new Date(start);
+                while (current <= end) {
+                    datesSet.add(current.toISOString().substring(0, 10));
+                    current.setDate(current.getDate() + 1);
+                }
+            }
+            
+            // 2. 既存の進捗データの日付
+            if (typeof currentProgress === 'object') {
+                Object.keys(currentProgress).forEach(date => {
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                        datesSet.add(date);
+                    }
+                });
+            }
+            
+            // 3. 既存の時間配分データの日付
+            if (typeof currentAllocations === 'object') {
+                Object.keys(currentAllocations).forEach(date => {
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                        datesSet.add(date);
+                    }
+                });
+            }
+            
+            return Array.from(datesSet).sort();
+        }
+
+        // 実績日（予定外の作業日）の追加
+        function addActualDate() {
+            const dateStr = prompt("実績日（YYYY-MM-DD）を入力してください：");
+            if (!dateStr) return;
+            
+            const regex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!regex.test(dateStr)) {
+                alert("日付形式が正しくありません (YYYY-MM-DD)。");
+                return;
+            }
+            
+            const testDate = new Date(dateStr);
+            if (isNaN(testDate.getTime())) {
+                alert("有効な日付ではありません。");
+                return;
+            }
+            
+            if (currentProgress[dateStr] === undefined) {
+                currentProgress[dateStr] = 0;
+            }
+            if (!currentAllocations[dateStr]) {
+                currentAllocations[dateStr] = {};
+            }
+            
+            updateAllocationForm();
+        }
+
         // 日別作業時間配分フォームの動的生成
         function updateAllocationForm() {
             const type = document.getElementById('sched-type').value;
@@ -1420,7 +1496,7 @@ function h(string $str): string {
                 return;
             }
 
-            const dates = getDateRange(startAt, endAt);
+            const dates = getDateRangeUnion(startAt, endAt);
             if (dates.length === 0) {
                 allocFields.style.display = 'none';
                 wrapper.innerHTML = '';
@@ -1439,6 +1515,7 @@ function h(string $str): string {
             timeSlots.forEach(slot => {
                 html += `<th>${escapeHtml(slot.name)} (${slot.start_time.substring(0,5)}-${slot.end_time.substring(0,5)})</th>`;
             });
+            html += '<th style="width: 100px;">進捗率 (%)</th>';
             html += '</tr></thead><tbody>';
 
             // 各日ごとの入力行の構築
@@ -1451,10 +1528,47 @@ function h(string $str): string {
                     }
                     html += `<td><input type="number" name="allocations[${date}][${slot.id}]" step="0.5" min="0" value="${val}" style="padding:0.25rem 0.5rem; width:80px; text-align:right;"></td>`;
                 });
+                let progVal = currentProgress[date] !== undefined ? currentProgress[date] : '';
+                html += `<td><input type="number" name="progress[${date}]" min="0" max="100" class="progress-pct-input" data-date="${date}" value="${progVal}" onchange="onProgressChange(this)" oninput="onProgressChange(this)" style="padding:0.25rem 0.5rem; width:80px; text-align:right;"></td>`;
                 html += '</tr>';
             });
             html += '</tbody></table>';
             wrapper.innerHTML = html;
+            updateStatusFromProgress();
+        }
+
+        function onProgressChange(input) {
+            const date = input.getAttribute('data-date');
+            let val = parseInt(input.value, 10);
+            if (isNaN(val)) {
+                delete currentProgress[date];
+            } else {
+                if (val < 0) val = 0;
+                if (val > 100) val = 100;
+                input.value = val;
+                currentProgress[date] = val;
+            }
+            updateStatusFromProgress();
+        }
+
+        function updateStatusFromProgress() {
+            const inputs = document.querySelectorAll('.progress-pct-input');
+            let total = 0;
+            inputs.forEach(input => {
+                total += parseInt(input.value || 0, 10);
+            });
+            const statusSelect = document.getElementById('sched-status');
+            const statusHidden = document.getElementById('sched-status-hidden');
+            
+            let status = 'todo';
+            if (total >= 100) {
+                status = 'done';
+            } else if (total > 0) {
+                status = 'doing';
+            }
+            
+            if (statusSelect) statusSelect.value = status;
+            if (statusHidden) statusHidden.value = status;
         }
 
         function escapeHtml(str) {
@@ -1518,13 +1632,27 @@ function h(string $str): string {
                 });
             }
 
+            // progress データのロード
+            currentProgress = {};
+            if (sched.progress && Array.isArray(sched.progress)) {
+                sched.progress.forEach(p => {
+                    currentProgress[p.date] = p.progress_percent;
+                });
+            }
+
             if (sched.type === 'task') {
                 document.getElementById('sched-status').value = sched.status || 'todo';
+                if (document.getElementById('sched-status-hidden')) {
+                    document.getElementById('sched-status-hidden').value = sched.status || 'todo';
+                }
                 document.getElementById('sched-weight').value = sched.weight || 0;
                 document.getElementById('sched-timeslot').value = sched.time_slot_id || '';
                 document.getElementById('sched-webhook').value = sched.discord_webhook_id || '';
             } else {
                 document.getElementById('sched-status').value = 'todo';
+                if (document.getElementById('sched-status-hidden')) {
+                    document.getElementById('sched-status-hidden').value = 'todo';
+                }
                 document.getElementById('sched-weight').value = 0;
                 document.getElementById('sched-timeslot').value = '';
                 document.getElementById('sched-webhook').value = '';
@@ -1555,12 +1683,16 @@ function h(string $str): string {
             document.getElementById('sched-start').value = '';
             document.getElementById('sched-end').value = '';
             document.getElementById('sched-status').value = 'todo';
+            if (document.getElementById('sched-status-hidden')) {
+                document.getElementById('sched-status-hidden').value = 'todo';
+            }
             document.getElementById('sched-weight').value = 0;
             document.getElementById('sched-timeslot').value = '';
             document.getElementById('sched-webhook').value = '';
             document.getElementById('sched-public').checked = true;
             
             currentAllocations = {};
+            currentProgress = {};
             document.getElementById('edit-scope-field').style.display = 'none';
             
             toggleFormFields();

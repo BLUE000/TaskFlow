@@ -127,6 +127,23 @@ try {
                                       )");
 
         foreach ($pushedSchedules as $s) {
+            $pushedStatus = $s['status'] ?? 'todo';
+            if (($s['type'] ?? 'simple') === 'task') {
+                $progSumStmt = $db->prepare("SELECT SUM(progress_percent) FROM schedule_progress WHERE schedule_id = :id");
+                $progSumStmt->execute([':id' => $s['id']]);
+                $sumVal = $progSumStmt->fetchColumn();
+                if ($sumVal !== null && $sumVal !== false) {
+                    $sumVal = (int)$sumVal;
+                    if ($sumVal == 0) {
+                        $pushedStatus = 'todo';
+                    } elseif ($sumVal >= 100) {
+                        $pushedStatus = 'done';
+                    } else {
+                        $pushedStatus = 'doing';
+                    }
+                }
+            }
+
             $schedStmt->execute([
                 ':id' => $s['id'],
                 ':title' => $s['title'], // 暗号化済みの文字列
@@ -134,7 +151,7 @@ try {
                 ':type' => $s['type'] ?? 'simple',
                 ':start_at' => !empty($s['start_at']) ? $s['start_at'] : null,
                 ':end_at' => !empty($s['end_at']) ? $s['end_at'] : null,
-                ':status' => $s['status'] ?? 'todo',
+                ':status' => $pushedStatus,
                 ':priority' => (int)($s['priority'] ?? 0),
                 ':weight' => (double)($s['weight'] ?? 0.0),
                 ':time_slot_id' => !empty($s['time_slot_id']) ? $s['time_slot_id'] : null,

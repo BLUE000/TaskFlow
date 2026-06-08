@@ -22,10 +22,27 @@ class ScheduleRepository {
      * @param array $allocations 日別作業時間配分データの配列
      * @return bool 処理結果（成功時 true、失敗時 false）
      */
-    public function save(array $schedule, array $allocations = []): bool {
+    public function save(array $schedule, array $allocations = [], array $progress = []): bool {
         // 必須フィールドの検証
         if (empty($schedule['id']) || empty($schedule['title'])) {
             return false;
+        }
+
+        // ステータス自動設定
+        if (($schedule['type'] ?? 'simple') === 'task') {
+            $totalProgress = 0;
+            if (!empty($progress)) {
+                foreach ($progress as $date => $pct) {
+                    $totalProgress += (int)$pct;
+                }
+            }
+            if ($totalProgress == 0) {
+                $schedule['status'] = 'todo';
+            } elseif ($totalProgress >= 100) {
+                $schedule['status'] = 'done';
+            } else {
+                $schedule['status'] = 'doing';
+            }
         }
 
         // 暗号化対象フィールドの暗号化
@@ -112,6 +129,30 @@ class ScheduleRepository {
                 }
             }
 
+            // 子レコード (schedule_progress) の保存処理
+            $delProgSql = "DELETE FROM schedule_progress WHERE schedule_id = :schedule_id";
+            $delProgStmt = $this->db->prepare($delProgSql);
+            $delProgStmt->execute([':schedule_id' => $schedule['id']]);
+
+            if (($schedule['type'] ?? 'simple') === 'task') {
+                if (!empty($progress)) {
+                    $insProgSql = "INSERT INTO schedule_progress (
+                                        schedule_id, date, progress_percent, created_at, updated_at
+                                    ) VALUES (
+                                        :schedule_id, :date, :progress_percent, NOW(), NOW()
+                                    )";
+                    $insProgStmt = $this->db->prepare($insProgSql);
+
+                    foreach ($progress as $date => $pct) {
+                        $insProgStmt->execute([
+                            ':schedule_id' => $schedule['id'],
+                            ':date' => $date,
+                            ':progress_percent' => (int)$pct
+                        ]);
+                    }
+                }
+            }
+
             $this->db->commit();
             return true;
         } catch (\Exception $e) {
@@ -148,10 +189,12 @@ class ScheduleRepository {
             $results[] = $this->decryptRow($row);
         }
 
-        // allocations を一括マッピング
+        // allocations と progress を一括マッピング
         if (!empty($results)) {
             $ids = array_column($results, 'id');
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            
+            // allocations マッピング
             $allocSql = "SELECT * FROM schedule_allocations WHERE schedule_id IN ($placeholders) AND is_deleted = 0";
             $allocStmt = $this->db->prepare($allocSql);
             $allocStmt->execute($ids);
@@ -162,8 +205,20 @@ class ScheduleRepository {
                 $allocMap[$alloc['schedule_id']][] = $alloc;
             }
             
+            // progress マッピング
+            $progSql = "SELECT * FROM schedule_progress WHERE schedule_id IN ($placeholders)";
+            $progStmt = $this->db->prepare($progSql);
+            $progStmt->execute($ids);
+            $allProgress = $progStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $progMap = [];
+            foreach ($allProgress as $prog) {
+                $progMap[$prog['schedule_id']][] = $prog;
+            }
+            
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
+                $row['progress'] = $progMap[$row['id']] ?? [];
             }
         }
 
@@ -186,10 +241,12 @@ class ScheduleRepository {
             $results[] = $this->decryptRow($row);
         }
 
-        // allocations を一括マッピング
+        // allocations と progress を一括マッピング
         if (!empty($results)) {
             $ids = array_column($results, 'id');
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            
+            // allocations マッピング
             $allocSql = "SELECT * FROM schedule_allocations WHERE schedule_id IN ($placeholders) AND is_deleted = 0";
             $allocStmt = $this->db->prepare($allocSql);
             $allocStmt->execute($ids);
@@ -200,8 +257,20 @@ class ScheduleRepository {
                 $allocMap[$alloc['schedule_id']][] = $alloc;
             }
             
+            // progress マッピング
+            $progSql = "SELECT * FROM schedule_progress WHERE schedule_id IN ($placeholders)";
+            $progStmt = $this->db->prepare($progSql);
+            $progStmt->execute($ids);
+            $allProgress = $progStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $progMap = [];
+            foreach ($allProgress as $prog) {
+                $progMap[$prog['schedule_id']][] = $prog;
+            }
+            
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
+                $row['progress'] = $progMap[$row['id']] ?? [];
             }
         }
 
@@ -221,10 +290,12 @@ class ScheduleRepository {
         $stmt->execute([':last_synced_at' => $lastSyncedAt]);
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // allocations を一括マッピング
+        // allocations と progress を一括マッピング
         if (!empty($results)) {
             $ids = array_column($results, 'id');
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            
+            // allocations マッピング
             $allocSql = "SELECT * FROM schedule_allocations WHERE schedule_id IN ($placeholders) AND is_deleted = 0";
             $allocStmt = $this->db->prepare($allocSql);
             $allocStmt->execute($ids);
@@ -235,8 +306,20 @@ class ScheduleRepository {
                 $allocMap[$alloc['schedule_id']][] = $alloc;
             }
             
+            // progress マッピング
+            $progSql = "SELECT * FROM schedule_progress WHERE schedule_id IN ($placeholders)";
+            $progStmt = $this->db->prepare($progSql);
+            $progStmt->execute($ids);
+            $allProgress = $progStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $progMap = [];
+            foreach ($allProgress as $prog) {
+                $progMap[$prog['schedule_id']][] = $prog;
+            }
+            
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
+                $row['progress'] = $progMap[$row['id']] ?? [];
             }
         }
 

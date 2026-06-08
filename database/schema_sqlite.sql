@@ -63,5 +63,16 @@ CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE
 );
 
+-- 6. schedule_progress テーブル (予定・タスクの進捗率)
+CREATE TABLE IF NOT EXISTS `schedule_progress` (
+  `schedule_id` TEXT NOT NULL,
+  `date` TEXT NOT NULL,
+  `progress_percent` INTEGER NOT NULL DEFAULT 0,
+  `created_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  `updated_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  PRIMARY KEY (`schedule_id`, `date`),
+  FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE
+);
+
 -- 初期データの登録 (最終同期時刻の初期化)
 INSERT OR IGNORE INTO `sync_metadata` (`key`, `value`) VALUES ('last_synced_at', '1970-01-01 00:00:00');
