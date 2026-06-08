@@ -558,19 +558,26 @@ function h(string $str): string {
         .gantt-bar.task {
             background: linear-gradient(90deg, var(--accent-green), #047857);
         }
-        .gantt-bar.task.doing {
-            background: linear-gradient(90deg, var(--accent-orange), #c2410c);
+        .gantt-bar.task.todo {
+            background: rgba(148, 163, 184, 0.25) !important;
+            border: 1px solid rgba(148, 163, 184, 0.5) !important;
+            color: #94a3b8 !important;
         }
-        .gantt-bar.task.delayed {
-            background: linear-gradient(90deg, var(--alert-red), #b91c1c);
-            border: 1px solid #ef4444;
+        .gantt-bar.task.done {
+            background: linear-gradient(90deg, #0f766e, #115e59) !important;
+            border: 1px solid #14b8a6 !important;
+            color: #ccfbf1 !important;
         }
-        .gantt-bar.task.ahead {
-            background: linear-gradient(90deg, var(--accent-blue), #0369a1);
-            border: 1px solid #38bdf8;
+        .gantt-bar.task.doing.delayed {
+            background: linear-gradient(90deg, var(--alert-red), #b91c1c) !important;
+            border: 1px solid #ef4444 !important;
         }
-        .gantt-bar.task.onschedule {
-            background: linear-gradient(90deg, var(--accent-green), #047857);
+        .gantt-bar.task.doing.ahead {
+            background: linear-gradient(90deg, var(--accent-blue), #0369a1) !important;
+            border: 1px solid #38bdf8 !important;
+        }
+        .gantt-bar.task.doing.onschedule {
+            background: linear-gradient(90deg, var(--accent-green), #047857) !important;
             border: 1px solid #10b981;
         }
 
@@ -1676,15 +1683,20 @@ function h(string $str): string {
                         }
                         P_total = Math.min(100, Math.max(0, P_total));
 
-                        // Calculate planned progress
-                        const P_planned = calculatePlannedProgress(startDateObj, endDateObj, today);
-
-                        if (P_total < P_planned) {
-                            bar.classList.add('delayed');
-                        } else if (P_total > P_planned) {
-                            bar.classList.add('ahead');
+                        if (P_total === 0) {
+                            bar.classList.add('todo');
+                        } else if (P_total >= 100) {
+                            bar.classList.add('done');
                         } else {
-                            bar.classList.add('onschedule');
+                            const P_planned = calculatePlannedProgress(startDateObj, endDateObj, today);
+                            bar.classList.add('doing');
+                            if (P_total < P_planned) {
+                                bar.classList.add('delayed');
+                            } else if (P_total > P_planned) {
+                                bar.classList.add('ahead');
+                            } else {
+                                bar.classList.add('onschedule');
+                            }
                         }
 
                         // Determine earliest and latest dates with positive progress or allocation
