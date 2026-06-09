@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS `schedules` (
 CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   `id` VARCHAR(36) NOT NULL,
   `schedule_id` VARCHAR(36) NOT NULL,
+  `segment_id` VARCHAR(36) NULL DEFAULT NULL,
   `date` DATE NOT NULL,
   `time_slot_id` VARCHAR(36) NOT NULL,
   `allocated_hours` DOUBLE NOT NULL DEFAULT 0.0,
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   PRIMARY KEY (`id`),
   CONSTRAINT `fk_allocations_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `fk_allocations_time_slot` FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+  -- fk_allocations_segment は schedule_segments テーブル作成後に ALTER TABLE で追加
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 5. schedule_progress テーブル (予定・タスクの進捗率)
@@ -84,4 +86,20 @@ CREATE TABLE IF NOT EXISTS `schedule_milestone_relations` (
   CONSTRAINT `fk_milestone_rel_target` FOREIGN KEY (`target_schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 7. schedule_segments テーブル (タスク分割セグメント)
+CREATE TABLE IF NOT EXISTS `schedule_segments` (
+  `id` VARCHAR(36) NOT NULL,
+  `schedule_id` VARCHAR(36) NOT NULL,
+  `segment_order` INT NOT NULL DEFAULT 1,
+  `start_at` DATETIME NOT NULL,
+  `end_at` DATETIME NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `fk_segments_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- schedule_allocations に segment_id FKを追加
+ALTER TABLE `schedule_allocations`
+  ADD CONSTRAINT `fk_allocations_segment` FOREIGN KEY (`segment_id`) REFERENCES `schedule_segments` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;

@@ -252,10 +252,21 @@ class ScheduleRepository {
                 $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
             }
             
+            // segments マッピング
+            $segSql = "SELECT * FROM schedule_segments WHERE schedule_id IN ($placeholders) AND is_deleted = 0 ORDER BY segment_order ASC";
+            $segStmt = $this->db->prepare($segSql);
+            $segStmt->execute($ids);
+            $allSegments = $segStmt->fetchAll(PDO::FETCH_ASSOC);
+            $segMap = [];
+            foreach ($allSegments as $seg) {
+                $segMap[$seg['schedule_id']][] = $seg;
+            }
+
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
                 $row['milestone_targets'] = $relMap[$row['id']] ?? [];
+                $row['segments'] = $segMap[$row['id']] ?? [];
             }
         }
 
@@ -316,10 +327,21 @@ class ScheduleRepository {
                 $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
             }
             
+            // segments マッピング
+            $segSql2 = "SELECT * FROM schedule_segments WHERE schedule_id IN ($placeholders) AND is_deleted = 0 ORDER BY segment_order ASC";
+            $segStmt2 = $this->db->prepare($segSql2);
+            $segStmt2->execute($ids);
+            $allSegments2 = $segStmt2->fetchAll(PDO::FETCH_ASSOC);
+            $segMap2 = [];
+            foreach ($allSegments2 as $seg) {
+                $segMap2[$seg['schedule_id']][] = $seg;
+            }
+
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
                 $row['milestone_targets'] = $relMap[$row['id']] ?? [];
+                $row['segments'] = $segMap2[$row['id']] ?? [];
             }
         }
 
@@ -490,5 +512,74 @@ class ScheduleRepository {
             ':discord_webhook_id' => !empty($data['discord_webhook_id']) ? $data['discord_webhook_id'] : null,
             ':recurrence_group_id' => $recurrenceGroupId
         ]);
+    }
+
+    /**
+     * セグメントを保存する（既存セグメントを論理削除後、再挿入）
+     * 全セグメント保存後、schedules.start_at/end_at を自動更新する
+     *
+     * @param string $scheduleId 対象予定のID
+     * @param array $segments セグメントデータ配列 [{start_at, end_at}, ...]（segment_orderは自動付与）
+     * @return bool 処理結果
+     */
+    public function saveSegments(string $scheduleId, array $segments): bool {
+        try {
+            $this->db->beginTransaction();
+
+            // 既存セグメントを論理削除
+            $delSql = "UPDATE schedule_segments SET is_deleted = 1, updated_at = NOW() WHERE schedule_id = :schedule_id AND is_deleted = 0";
+            $delStmt = $this->db->prepare($delSql);
+            $delStmt->execute([':schedule_id' => $scheduleId]);
+
+            if (!empty($segments)) {
+                $insSql = "INSERT INTO schedule_segments (id, schedule_id, segment_order, start_at, end_at, created_at, updated_at, is_deleted)
+                           VALUES (:id, :schedule_id, :segment_order, :start_at, :end_at, NOW(), NOW(), 0)";
+                $insStmt = $this->db->prepare($insSql);
+
+                $order = 1;
+                foreach ($segments as $seg) {
+                    $insStmt->execute([
+                        ':id'            => $this->generate_uuidv4(),
+                        ':schedule_id'   => $scheduleId,
+                        ':segment_order' => $order++,
+                        ':start_at'      => $seg['start_at'],
+                        ':end_at'        => $seg['end_at'],
+                    ]);
+                }
+
+                // schedules.start_at / end_at を自動更新（最初/最後のセグメント）
+                $firstStart = $segments[0]['start_at'];
+                $lastEnd    = end($segments)['end_at'];
+                $updSql = "UPDATE schedules SET start_at = :start_at, end_at = :end_at, updated_at = NOW() WHERE id = :id";
+                $updStmt = $this->db->prepare($updSql);
+                $updStmt->execute([
+                    ':start_at' => $firstStart,
+                    ':end_at'   => $lastEnd,
+                    ':id'       => $scheduleId,
+                ]);
+            }
+
+            $this->db->commit();
+            return true;
+        } catch (\Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            error_log("saveSegments failed: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 指定された予定IDのセグメントリストを取得する
+     *
+     * @param string $scheduleId 予定ID
+     * @return array セグメントデータの配列（segment_order昇順）
+     */
+    public function findSegmentsByScheduleId(string $scheduleId): array {
+        $sql = "SELECT * FROM schedule_segments WHERE schedule_id = :schedule_id AND is_deleted = 0 ORDER BY segment_order ASC";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':schedule_id' => $scheduleId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }

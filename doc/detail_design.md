@@ -118,14 +118,28 @@ MySQL データベースへの予定データの保存（CRUD）を担当し、S
   1. データベース（MySQL）に対して、公開予定かつ未削除のレコード（`is_public = 1 AND is_deleted = 0`）を日付（`start_at`）昇順で取得する `SELECT` クエリを実行します。
   2. 取得したレコードセットをループ処理し、各レコードの `title` を `CryptoUtil::decrypt` で平文に復号します。また、`description` も存在する場合は同様に復号します。
   3. 各予定レコードに紐づく `schedule_allocations` を取得し、`allocations` キーとしてレコード配列内にネスト（内包）させます。
-  4. タイトルと詳細が平文に復元され、日別割り当てデータがネストされた予定レコードの配列を返却します。
+  4. 各予定レコードに紐づく `schedule_segments`（`is_deleted=0`）を `segment_order` 昇順で取得し、`segments` キーとしてネストさせます。セグメントが無い場合は空配列。
+  5. タイトルと詳細が平文に復元され、日別割り当てデータとセグメントリストがネストされた予定レコードの配列を返却します。
+* **`saveSegments(string $scheduleId, array $segments): bool`**:
+  1. トランザクションを開始します。
+  2. `schedule_id = :scheduleId AND is_deleted = 0` の既存セグメントを全て論理削除（`is_deleted=1`）します。
+  3. `$segments` 配列をループし、`segment_order`（1始まり）、`start_at`、`end_at` を新規UUIDとともに `schedule_segments` にインサートします。
+  4. 全セグメント保存後、`schedules.start_at` を最初のセグメントの `start_at`、`schedules.end_at` を最後のセグメントの `end_at` で更新します。
+  5. トランザクションをコミットします。エラー時はロールバックして `false` を返します。
+* **`findSegmentsByScheduleId(string $scheduleId): array`**:
+  1. `schedule_id = :scheduleId AND is_deleted = 0` のセグメントを `segment_order` 昇順で取得して返却します。
 * **`deleteSeries($recurrenceGroupId)`**:
   1. `recurrence_group_id` に紐づくすべてのレコードを一括論理削除（`is_deleted = 1`）します。
 
 ### 2.3. 一般閲覧画面（`index.php`）の制御ロジック
 * **ログイン・ログアウト処理**:
-  * 一般画面でログインPOSTリクエスト（パラメータ: `form_action = index_login`, `password`）を検知した際、`admin.php` と同様に `password_verify` で管理者パスワードハッシュと比較検証します。認証成功時は、セッションIDを再生成した上で `$_SESSION['admin_logged_in'] = true` をセットし、`index.php` へリダイレクトして非公開データを含む全件をロードします。
-  * `index.php?action=logout` アクセス時は、セッションをクリアした上で `index.php` へリダイレクトし、ログイン状態を解除します。
+  * 一般画面でログインPOSTリクエスト（パラメータ: `form_action = index_login`, `password`）を検知した際、`admin.php` と同様に `password_verify` で管理者パスワードハッシュと比較検証します。認証成功時は、セッションIDを再生成した上で `$_SESSION['admin_logged_in'] = true` をセットし、`$_SERVER['PHP_SELF']` を用いて正しいパスにリダイレクトして非公開データを含む全件をロードします。
+  * `index.php?action=logout` アクセス時は、セッションをクリアした上で `$_SERVER['PHP_SELF']` を用いて正しいパスの `index.php` へリダイレクトし、ログイン状態を解除します。
+* **ガントチャート描画ロジック (JavaScript) — セグメント対応**:
+  * 各タスクの `segments` 配列を参照し、セグメントが存在する場合は同一行に複数のガントバーを描画。セグメントが無い場合は従来通り `start_at / end_at` の単一バー。
+  * 同一タスクの各セグメントを `segment_order` 順に処理し、それぞれの `start_at` / `end_at` からガント内のピクセル位置を計算して描画。
+  * セグメント間の空白範囲（他タスクが入る期間）はバーを描画せず、ボッチした表示にする。
+  * タスクのタイトルは最初のセグメントのバー内に表示する。
 * **カテゴリのGETパラメータ連動および表示トグル（JavaScript側）**:
   * 画面起動時に `URLSearchParams` を用いて `categories` パラメータを抽出し、カンマ区切りで複数のカテゴリを取得。それを `selectedCategories` セットに初期登録します。
   * `initCategoryFilters` 実行時に、該当するカテゴリバッジ（チップ）に `.active` クラスを自動付与して初期レンダリングを行います。

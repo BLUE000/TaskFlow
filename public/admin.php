@@ -262,8 +262,28 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 }
             }
 
+            // セグメントデータの取得
+            $segments = [];
+            if (in_array($type, ['task', 'period']) && !empty($_POST['segments']) && is_array($_POST['segments'])) {
+                foreach ($_POST['segments'] as $seg) {
+                    $seg_start = trim($seg['start_at'] ?? '');
+                    $seg_end   = trim($seg['end_at']   ?? '');
+                    if ($seg_start !== '' && $seg_end !== '') {
+                        $segments[] = [
+                            'start_at' => str_replace('T', ' ', $seg_start),
+                            'end_at'   => str_replace('T', ' ', $seg_end),
+                        ];
+                    }
+                }
+            }
+
             if ($save_success) {
                 $message = "予定を保存しました。";
+
+                // セグメントの保存（セグメントが送信された場合のみ）
+                if (!empty($segments)) {
+                    $scheduleRepo->saveSegments($id, $segments);
+                }
 
                 // Discord通知の送信処理
                 if (!empty($schedule['discord_webhook_id'])) {
@@ -283,6 +303,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             } else {
                 $error = "予定の保存に失敗しました。";
             }
+
         } elseif ($form_action === 'delete_schedule') {
             // 論理削除
             $id = $_POST['id'] ?? '';
@@ -970,6 +991,16 @@ function h(string $str): string {
                                 </div>
                             </div>
 
+                            <!-- タスク分割セグメント管理フォーム -->
+                            <div id="segment-fields" style="display: none; border-top: 1px dashed var(--panel-border); padding-top: 1rem; margin-top: 1rem;">
+                                <label style="margin-bottom: 0.5rem; display:block; font-weight: 600;">期間分割（セグメント）</label>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.75rem; line-height: 1.4;">※ 1つのタスクを複数の非連続な期間に分割できます。ガントチャートで同一行に複数のバーとして表示されます。セグメントを設定すると「開始日時・終了日時」は最初/最後のセグメントで自動更新されます。</p>
+                                <div id="segment-list">
+                                    <!-- JavaScript で動的に行を追加 -->
+                                </div>
+                                <button type="button" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.9rem; margin-top: 0.5rem;" onclick="addSegmentRow()">＋ 期間を追加</button>
+                            </div>
+
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
                                 <div class="toggle-container">
                                     <input type="checkbox" id="sched-public" name="is_public" class="toggle-input" checked>
@@ -987,73 +1018,157 @@ function h(string $str): string {
                             <span>登録済みの予定一覧 (削除済除く)</span>
                             <span id="active-schedules-toggle-icon" class="accordion-icon">▼</span>
                         </div>
-                        <div id="active-schedules-container" style="overflow-x:auto;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>タイトル</th>
-                                        <th>種類</th>
-                                        <th>期間</th>
-                                        <th>負荷(重み)</th>
-                                        <th>公開状態</th>
-                                        <th>操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php 
-                                    $activeScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted'] && $s['type'] !== 'memo'; });
-                                    if (empty($activeScheds)): 
-                                    ?>
+                        <div id="active-schedules-container">
+                            <?php 
+                            $activeScheds = array_filter($allSchedules, function($s) { return !(int)$s['is_deleted'] && $s['type'] !== 'memo'; });
+                            
+                            // カテゴリと状態でグループ化
+                            $groupedActiveScheds = [];
+                            foreach ($activeScheds as $s) {
+                                $cat = !empty($s['category']) ? trim($s['category']) : '未分類';
+                                
+                                $statusGroup = 'schedules';
+                                if ($s['type'] === 'task') {
+                                    $statusGroup = $s['status'] ?? 'todo';
+                                }
+                                
+                                if (!isset($groupedActiveScheds[$cat])) {
+                                    $groupedActiveScheds[$cat] = [
+                                        'doing' => [],
+                                        'todo' => [],
+                                        'done' => [],
+                                        'schedules' => []
+                                    ];
+                                }
+                                $groupedActiveScheds[$cat][$statusGroup][] = $s;
+                            }
+
+                            // カテゴリをソート（「未分類」は最後にする）
+                            uksort($groupedActiveScheds, function($a, $b) {
+                                if ($a === '未分類') return 1;
+                                if ($b === '未分類') return -1;
+                                return strcasecmp($a, $b);
+                            });
+                            ?>
+
+                            <?php if (empty($groupedActiveScheds)): ?>
+                                <table style="margin-bottom:0;">
+                                    <tbody>
                                         <tr>
                                             <td colspan="6" style="text-align:center; color:var(--text-secondary);">予定が登録されていません。</td>
                                         </tr>
-                                    <?php else: ?>
-                                        <?php foreach ($activeScheds as $s): ?>
-                                            <tr>
-                                                <td style="font-weight:600;"><?php echo h($s['title']); ?></td>
-                                                <td><?php echo h($s['type']); ?></td>
-                                                <td>
-                                                    <?php 
-                                                    if ($s['start_at']) {
-                                                        echo substr($s['start_at'], 0, 16);
-                                                        if ($s['end_at']) {
-                                                            echo ' 〜 ' . substr($s['end_at'], 5, 11);
-                                                        }
-                                                    } else {
-                                                        echo '-';
-                                                    }
-                                                    ?>
-                                                </td>
-                                                <td><?php echo $s['type'] === 'task' ? h($s['weight']) . 'h' : '-'; ?></td>
-                                                <td>
-                                                    <span class="badge <?php echo $s['is_public'] ? 'badge-public' : 'badge-private'; ?>">
-                                                        <?php echo $s['is_public'] ? '公開' : '非公開'; ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem; margin-right:0.25rem;" onclick='editSchedule(<?php echo json_encode($s, JSON_UNESCAPED_UNICODE); ?>)'>編集</button>
-                                                    <?php if (!empty($s['recurrence_group_id'])): ?>
-                                                    <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirmDeleteSeries(this);">
-                                                        <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
-                                                        <input type="hidden" name="form_action" value="delete_schedule">
-                                                        <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
-                                                        <input type="hidden" name="recurrence_mode" value="single">
-                                                        <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
-                                                    </form>
-                                                    <?php else: ?>
-                                                    <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirm('本当にこの予定を削除しますか？');">
-                                                        <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
-                                                        <input type="hidden" name="form_action" value="delete_schedule">
-                                                        <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
-                                                        <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
-                                                    </form>
-                                                    <?php endif; ?>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    <?php endif; ?>
-                                </tbody>
-                            </table>
+                                    </tbody>
+                                </table>
+                            <?php else: ?>
+                                <?php 
+                                $catIndex = 0;
+                                foreach ($groupedActiveScheds as $catName => $statusGroups):
+                                    $catId = 'cat-container-' . $catIndex;
+                                    $catIconId = 'cat-icon-' . $catIndex;
+                                    $totalCount = count($statusGroups['doing']) + count($statusGroups['todo']) + count($statusGroups['done']) + count($statusGroups['schedules']);
+                                    $catIndex++;
+                                ?>
+                                    <!-- カテゴリごとのアコーディオン -->
+                                    <div class="category-section" style="margin-bottom: 1.5rem; background: rgba(30, 41, 59, 0.2); border: 1px solid var(--panel-border); border-radius: 12px; overflow: hidden;">
+                                        <div class="accordion-header" style="font-weight:700; font-size:0.9rem; padding: 0.85rem 1.25rem; display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.02); cursor: pointer;" onclick="toggleSectionVisibility('<?php echo $catId; ?>', '<?php echo $catIconId; ?>')">
+                                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                                <span style="color: var(--accent-blue);">📁</span>
+                                                <span>カテゴリ: <?php echo h($catName); ?></span>
+                                                <span style="font-size: 0.75rem; background: rgba(255,255,255,0.08); padding: 0.15rem 0.4rem; border-radius: 999px; color: var(--text-secondary);"><?php echo $totalCount; ?> 件</span>
+                                            </div>
+                                            <span id="<?php echo $catIconId; ?>" class="accordion-icon" style="transition: var(--transition-smooth); font-size: 0.8rem;">▼</span>
+                                        </div>
+                                        
+                                        <div id="<?php echo $catId; ?>" style="padding: 1rem; border-top: 1px solid var(--panel-border);">
+                                            <?php
+                                            $statusGroupNames = [
+                                                'doing' => 'タスク - 進行中 (Doing)',
+                                                'todo' => 'タスク - 未着手 (To-Do)',
+                                                'done' => 'タスク - 完了 (Done)',
+                                                'schedules' => '一般予定 (Simple / Period / Milestone)'
+                                            ];
+                                            $displayOrder = ['doing', 'todo', 'done', 'schedules'];
+                                            
+                                            foreach ($displayOrder as $groupKey):
+                                                if (empty($statusGroups[$groupKey])) continue;
+                                                $schedList = $statusGroups[$groupKey];
+                                            ?>
+                                                <div class="status-group-container" style="margin-bottom: 1.25rem;">
+                                                    <h5 style="font-size: 0.8rem; font-weight: 700; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; color: <?php
+                                                        echo $groupKey === 'doing' ? 'var(--accent-orange)' : 
+                                                            ($groupKey === 'todo' ? 'var(--text-secondary)' : 
+                                                            ($groupKey === 'done' ? 'var(--accent-green)' : 'var(--accent-blue)'));
+                                                    ?>;">
+                                                        <span style="font-size: 0.5rem;">●</span>
+                                                        <span><?php echo h($statusGroupNames[$groupKey]); ?></span>
+                                                        <span style="font-size: 0.75rem; font-weight: normal; color: var(--text-secondary);">(<?php echo count($schedList); ?>件)</span>
+                                                    </h5>
+                                                    
+                                                    <div style="overflow-x:auto;">
+                                                        <table style="margin-bottom: 0.5rem;">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th>タイトル</th>
+                                                                    <th>種類</th>
+                                                                    <th>期間</th>
+                                                                    <th>負荷(重み)</th>
+                                                                    <th>公開状態</th>
+                                                                    <th>操作</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <?php foreach ($schedList as $s): ?>
+                                                                    <tr>
+                                                                        <td style="font-weight:600;"><?php echo h($s['title']); ?></td>
+                                                                        <td><?php echo h($s['type']); ?></td>
+                                                                        <td>
+                                                                            <?php 
+                                                                            if ($s['start_at']) {
+                                                                                echo substr($s['start_at'], 0, 16);
+                                                                                if ($s['end_at']) {
+                                                                                    echo ' 〜 ' . substr($s['end_at'], 5, 11);
+                                                                                }
+                                                                            } else {
+                                                                                echo '-';
+                                                                            }
+                                                                            ?>
+                                                                        </td>
+                                                                        <td><?php echo $s['type'] === 'task' ? h($s['weight']) . 'h' : '-'; ?></td>
+                                                                        <td>
+                                                                            <span class="badge <?php echo $s['is_public'] ? 'badge-public' : 'badge-private'; ?>">
+                                                                                <?php echo $s['is_public'] ? '公開' : '非公開'; ?>
+                                                                            </span>
+                                                                        </td>
+                                                                        <td>
+                                                                            <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem; margin-right:0.25rem;" onclick='editSchedule(<?php echo json_encode($s, JSON_UNESCAPED_UNICODE); ?>)'>編集</button>
+                                                                            <?php if (!empty($s['recurrence_group_id'])): ?>
+                                                                            <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirmDeleteSeries(this);">
+                                                                                <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                                                                                <input type="hidden" name="form_action" value="delete_schedule">
+                                                                                <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
+                                                                                <input type="hidden" name="recurrence_mode" value="single">
+                                                                                <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
+                                                                            </form>
+                                                                            <?php else: ?>
+                                                                            <form method="POST" action="admin.php" style="display:inline;" onsubmit="return confirm('本当にこの予定を削除しますか？');">
+                                                                                <input type="hidden" name="csrf_token" value="<?php echo h($_SESSION['csrf_token']); ?>">
+                                                                                <input type="hidden" name="form_action" value="delete_schedule">
+                                                                                <input type="hidden" name="id" value="<?php echo h($s['id']); ?>">
+                                                                                <button type="submit" class="btn btn-danger" style="padding:0.25rem 0.5rem; font-size:0.75rem;">削除</button>
+                                                                            </form>
+                                                                            <?php endif; ?>
+                                                                        </td>
+                                                                    </tr>
+                                                                <?php endforeach; ?>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
                         </div>
 
                         <!-- やることメモ一覧リスト -->
@@ -1433,7 +1548,13 @@ function h(string $str): string {
             } else {
                 recurrenceField.style.display = 'none';
             }
-            
+
+            // セグメントフィールドは task / period タイプのみ表示
+            const segmentFields = document.getElementById('segment-fields');
+            if (segmentFields) {
+                segmentFields.style.display = (type === 'task' || type === 'period') ? 'block' : 'none';
+            }
+
             updateAllocationForm();
         }
 
@@ -1718,6 +1839,9 @@ function h(string $str): string {
                 editScopeField.style.display = 'none';
             }
 
+            // セグメントのロード
+            loadSegments(sched.segments || []);
+
             toggleFormFields();
             
             // フォームへスクロール
@@ -1750,6 +1874,9 @@ function h(string $str): string {
             if (milestoneTargetsSelect) {
                 Array.from(milestoneTargetsSelect.options).forEach(opt => opt.selected = false);
             }
+
+            // セグメントのクリア
+            loadSegments([]);
 
             document.getElementById('edit-scope-field').style.display = 'none';
             
@@ -1791,6 +1918,75 @@ function h(string $str): string {
             document.getElementById('current-password').value = '';
             document.getElementById('new-password').value = '';
             document.getElementById('confirm-password').value = '';
+        }
+
+        // ─── セグメント管理 ────────────────────────────────────────────────
+
+        /**
+         * セグメント一覧を segment-list に描画する
+         * @param {Array} segments [{id, start_at, end_at, segment_order}, ...]
+         */
+        function loadSegments(segments) {
+            const list = document.getElementById('segment-list');
+            if (!list) return;
+            list.innerHTML = '';
+            if (segments && segments.length > 0) {
+                segments.forEach(seg => {
+                    addSegmentRow(
+                        seg.start_at ? seg.start_at.substring(0, 16).replace(' ', 'T') : '',
+                        seg.end_at   ? seg.end_at.substring(0, 16).replace(' ', 'T')   : ''
+                    );
+                });
+            }
+        }
+
+        /**
+         * セグメント入力行を1行追加する
+         * @param {string} startVal  開始日時の初期値 (YYYY-MM-DDTHH:mm)
+         * @param {string} endVal    終了日時の初期値
+         */
+        function addSegmentRow(startVal = '', endVal = '') {
+            const list = document.getElementById('segment-list');
+            if (!list) return;
+
+            const index = list.children.length;
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; gap:0.75rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;';
+            row.innerHTML = `
+                <span style="font-size:0.8rem; color:var(--text-secondary); min-width:3rem;">第${index + 1}期</span>
+                <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap;">
+                    <label style="font-size:0.8rem; font-weight:normal; margin:0;">開始</label>
+                    <input type="datetime-local" name="segments[${index}][start_at]" value="${escapeHtml(startVal)}"
+                           style="padding:0.3rem 0.5rem; font-size:0.85rem; background:rgba(15,23,42,0.6); border:1px solid var(--panel-border); border-radius:6px; color:var(--text-primary);">
+                    <label style="font-size:0.8rem; font-weight:normal; margin:0;">終了</label>
+                    <input type="datetime-local" name="segments[${index}][end_at]" value="${escapeHtml(endVal)}"
+                           style="padding:0.3rem 0.5rem; font-size:0.85rem; background:rgba(15,23,42,0.6); border:1px solid var(--panel-border); border-radius:6px; color:var(--text-primary);">
+                </div>
+                <button type="button" onclick="removeSegmentRow(this)" style="padding:0.2rem 0.6rem; font-size:0.8rem; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; border-radius:6px; cursor:pointer;">✕ 削除</button>
+            `;
+            list.appendChild(row);
+            // name の index を振り直す
+            renumberSegments();
+        }
+
+        /** セグメント行を削除して index を振り直す */
+        function removeSegmentRow(btn) {
+            btn.closest('div[style]').remove();
+            renumberSegments();
+        }
+
+        /** セグメントの表示番号と name[index] を振り直す */
+        function renumberSegments() {
+            const list = document.getElementById('segment-list');
+            if (!list) return;
+            Array.from(list.children).forEach((row, i) => {
+                const label = row.querySelector('span');
+                if (label) label.textContent = `第${i + 1}期`;
+                const inputs = row.querySelectorAll('input[name]');
+                inputs.forEach(inp => {
+                    inp.name = inp.name.replace(/segments\[\d+\]/, `segments[${i}]`);
+                });
+            });
         }
     </script>
 </body>

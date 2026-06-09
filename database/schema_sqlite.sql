@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS `sync_metadata` (
 CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   `id` TEXT NOT NULL PRIMARY KEY,
   `schedule_id` TEXT NOT NULL,
+  `segment_id` TEXT DEFAULT NULL,
   `date` TEXT NOT NULL,
   `time_slot_id` TEXT NOT NULL,
   `allocated_hours` REAL NOT NULL DEFAULT 0.0,
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS `schedule_allocations` (
   `updated_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   `is_deleted` INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE
+  FOREIGN KEY (`time_slot_id`) REFERENCES `time_slots` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`segment_id`) REFERENCES `schedule_segments` (`id`) ON DELETE SET NULL
 );
 
 -- 6. schedule_progress テーブル (予定・タスクの進捗率)
@@ -81,6 +83,19 @@ CREATE TABLE IF NOT EXISTS `schedule_milestone_relations` (
   PRIMARY KEY (`milestone_id`, `target_schedule_id`),
   FOREIGN KEY (`milestone_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   FOREIGN KEY (`target_schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- 8. schedule_segments テーブル (タスク分割セグメント)
+CREATE TABLE IF NOT EXISTS `schedule_segments` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `schedule_id` TEXT NOT NULL,
+  `segment_order` INTEGER NOT NULL DEFAULT 1,
+  `start_at` TEXT NOT NULL,
+  `end_at` TEXT NOT NULL,
+  `created_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  `updated_at` TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  `is_deleted` INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE
 );
 
 -- 初期データの登録 (最終同期時刻の初期化)

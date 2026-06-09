@@ -52,7 +52,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
     
     // GETパラメータを保持したままログアウト後のURLへリダイレクト
     $query = !empty($_GET) ? '?' . http_build_query(array_filter($_GET, function($k) { return $k !== 'action'; }, ARRAY_FILTER_USE_KEY)) : '';
-    header("Location: index.php" . $query);
+    $selfPath = $_SERVER['PHP_SELF']; // 例: /TaskFlow/public/index.php
+    header("Location: " . $selfPath . $query);
     exit;
 }
 
@@ -74,7 +75,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && $_P
         
         // GETパラメータ（categoriesなど）を維持してリダイレクト
         $query = !empty($_GET) ? '?' . http_build_query($_GET) : '';
-        header("Location: index.php" . $query);
+        $selfPath = $_SERVER['PHP_SELF']; // 例: /TaskFlow/public/index.php
+        header("Location: " . $selfPath . $query);
         exit;
     } else {
         $login_error = 'パスワードが正しくありません。';
@@ -1888,33 +1890,79 @@ function h(string $str): string {
                             });
                         }
 
-                        if (startAtStr === endAtStr) {
-                            // 1日未満（当日のみ）の場合は●（ドット）として配置
-                            bar.style.left = `${startOffset * 40 + 12}px`; // 40pxセルの真ん中に配置 (40-16)/2 = 12px
-                            bar.style.width = '16px';
-                            bar.style.height = '16px';
-                            bar.style.borderRadius = '50%';
-                            bar.style.padding = '0';
-                            bar.style.justifyContent = 'center';
-                            bar.innerText = '';
+                        // ─── セグメント対応バー描画 ───────────────────────────────────
+                        const segments = event.segments && Array.isArray(event.segments) && event.segments.length > 0
+                            ? event.segments
+                            : null;
+
+                        if (segments) {
+                            // セグメントがある場合：同一行に複数バーを描画
+                            segments.forEach((seg, segIdx) => {
+                                const segStartStr = seg.start_at ? seg.start_at.substring(0, 10) : null;
+                                const segEndStr   = seg.end_at   ? seg.end_at.substring(0, 10)   : segStartStr;
+                                if (!segStartStr) return;
+
+                                const segStartObj  = parseLocalDate(segStartStr);
+                                const segEndObj    = parseLocalDate(segEndStr);
+                                const segStartOff  = Math.max(0, Math.round((segStartObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                                const segEndOff    = Math.min(timelineDays.length - 1, Math.round((segEndObj   - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                                const segDuration  = segEndOff - segStartOff + 1;
+                                if (segDuration <= 0) return;
+
+                                const segBar = document.createElement('div');
+                                segBar.className = bar.className; // 同じクラス（進捗状態含む）を引き継ぐ
+
+                                if (segStartStr === segEndStr) {
+                                    segBar.style.left   = `${segStartOff * 40 + 12}px`;
+                                    segBar.style.width  = '16px';
+                                    segBar.style.height = '16px';
+                                    segBar.style.borderRadius = '50%';
+                                    segBar.style.padding      = '0';
+                                    segBar.style.justifyContent = 'center';
+                                    segBar.innerText = '';
+                                } else {
+                                    segBar.style.left  = `${segStartOff * 40 + 8}px`;
+                                    segBar.style.width = `${segDuration * 40 - 16}px`;
+                                    // タイトルは最初のセグメントにのみ表示
+                                    segBar.innerText = segIdx === 0 ? displayTitle : '';
+                                }
+
+                                const segTooltip = `${escapeHtml(displayTitle)}: 第${segIdx + 1}期 (${segStartStr} 〜 ${segEndStr})`;
+                                segBar.addEventListener('mouseenter', (e) => showTooltip(e, segTooltip));
+                                segBar.addEventListener('mouseleave', hideTooltip);
+                                segBar.addEventListener('click', () => showEventDetail(event, segStartObj));
+                                rowBody.appendChild(segBar);
+                            });
                         } else {
-                            // 1日以上の場合は通常のバーとして配置
-                            bar.style.left = `${startOffset * 40 + 8}px`;
-                            bar.style.width = `${durationDays * 40 - 16}px`;
-                            bar.innerText = displayTitle;
+                            // セグメントなし：従来の単一バー描画
+                            if (startAtStr === endAtStr) {
+                                // 1日未満（当日のみ）の場合は●（ドット）として配置
+                                bar.style.left = `${startOffset * 40 + 12}px`;
+                                bar.style.width = '16px';
+                                bar.style.height = '16px';
+                                bar.style.borderRadius = '50%';
+                                bar.style.padding = '0';
+                                bar.style.justifyContent = 'center';
+                                bar.innerText = '';
+                            } else {
+                                // 1日以上の場合は通常のバーとして配置
+                                bar.style.left = `${startOffset * 40 + 8}px`;
+                                bar.style.width = `${durationDays * 40 - 16}px`;
+                                bar.innerText = displayTitle;
+                            }
+
+                            // ホバー時にツールチップでタイトルを表示
+                            bar.addEventListener('mouseenter', (e) => {
+                                showTooltip(e, escapeHtml(displayTitle));
+                            });
+                            bar.addEventListener('mouseleave', hideTooltip);
+
+                            bar.addEventListener('click', () => {
+                                showEventDetail(event, startDateObj);
+                            });
+
+                            rowBody.appendChild(bar);
                         }
-
-                        // ホバー時にツールチップでタイトルを表示
-                        bar.addEventListener('mouseenter', (e) => {
-                            showTooltip(e, escapeHtml(displayTitle));
-                        });
-                        bar.addEventListener('mouseleave', hideTooltip);
-
-                        bar.addEventListener('click', () => {
-                            showEventDetail(event, startDateObj);
-                        });
-
-                        rowBody.appendChild(bar);
                     }
                 }
 
