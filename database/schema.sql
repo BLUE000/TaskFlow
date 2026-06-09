@@ -75,3 +75,13 @@ CREATE TABLE IF NOT EXISTS `schedule_progress` (
   CONSTRAINT `fk_progress_schedule` FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 6. schedule_milestone_relations テーブル (マイルストーンとタスクの関連付け用)
+CREATE TABLE IF NOT EXISTS `schedule_milestone_relations` (
+  `milestone_id` VARCHAR(36) NOT NULL,
+  `target_schedule_id` VARCHAR(36) NOT NULL,
+  PRIMARY KEY (`milestone_id`, `target_schedule_id`),
+  CONSTRAINT `fk_milestone_rel_milestone` FOREIGN KEY (`milestone_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_milestone_rel_target` FOREIGN KEY (`target_schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+

@@ -392,6 +392,12 @@ function h(string $str): string {
             color: #f5d0fe;
         }
 
+        .event-milestone {
+            background: rgba(245, 158, 11, 0.15);
+            border-left: 3px solid #f59e0b;
+            color: #fde68a;
+        }
+
         .event-task {
             background: rgba(16, 185, 129, 0.15);
             border-left: 3px solid var(--accent-green);
@@ -597,6 +603,26 @@ function h(string $str): string {
             border-color: var(--alert-red) !important;
         }
 
+        /* マイルストーンの星印描画スタイル */
+        .gantt-milestone-star {
+            position: absolute;
+            color: #f59e0b;
+            font-size: 1.25rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            z-index: 4;
+            transition: transform 0.2s;
+            user-select: none;
+            top: calc(50% - 8px);
+        }
+        .gantt-milestone-star:hover {
+            transform: scale(1.3);
+            text-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+        }
 
         /* アニメーション */
         @keyframes pulse {
@@ -1593,7 +1619,16 @@ function h(string $str): string {
                     const eDate = sched.end_at ? sched.end_at.substring(0, 10) : sDate;
                     
                     // 期間が当月の範囲にかぶっているか
-                    return sDate <= lastDateStr && eDate >= firstDateStr;
+                    if (!(sDate <= lastDateStr && eDate >= firstDateStr)) {
+                        return false;
+                    }
+
+                    // 単一タスクに関連付けられたマイルストーンは独立した行を描画しない
+                    if (sched.type === 'milestone' && sched.milestone_targets && sched.milestone_targets.length === 1) {
+                        return false;
+                    }
+
+                    return true;
                 }
                 return false;
             });
@@ -1664,151 +1699,223 @@ function h(string $str): string {
                 const durationDays = endOffset - startOffset + 1;
 
                 if (durationDays > 0) {
-                    const bar = document.createElement('div');
-                    bar.className = `gantt-bar ${event.type}`;
-                    
-                    if (isPrivate) {
-                        bar.classList.add('private-schedule');
-                    }
-
                     const displayTitle = isPrivate ? `🔒 [非公開] ${event.title}` : event.title;
 
-                    if (event.type === 'task') {
-                        // Calculate actual progress
-                        let P_total = 0;
-                        if (event.progress && Array.isArray(event.progress)) {
-                            event.progress.forEach(p => {
-                                P_total += parseInt(p.progress_percent || 0, 10);
-                            });
-                        }
-                        P_total = Math.min(100, Math.max(0, P_total));
+                    if (event.type === 'milestone') {
+                        // 独立行マイルストーン（0個または2個以上の関連タスク）
+                        const star = document.createElement('div');
+                        star.className = 'gantt-milestone-star';
+                        star.innerText = '★';
+                        star.style.left = `${startOffset * 40 + 12}px`;
+                        star.style.top = `calc(50% - 8px)`;
 
-                        if (P_total === 0) {
-                            bar.classList.add('todo');
-                        } else if (P_total >= 100) {
-                            bar.classList.add('done');
-                        } else {
-                            const P_planned = calculatePlannedProgress(startDateObj, endDateObj, today);
-                            bar.classList.add('doing');
-                            if (P_total < P_planned) {
-                                bar.classList.add('delayed');
-                            } else if (P_total > P_planned) {
-                                bar.classList.add('ahead');
-                            } else {
-                                bar.classList.add('onschedule');
-                            }
-                        }
-
-                        // Determine earliest and latest dates with positive progress or allocation
-                        let actualStartDateObj = null;
-                        let actualEndDateObj = null;
-
-                        if (event.progress && Array.isArray(event.progress)) {
-                            event.progress.forEach(p => {
-                                const pct = parseInt(p.progress_percent || 0, 10);
-                                if (pct > 0) {
-                                    const d = parseLocalDate(p.date);
-                                    if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
-                                    if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
+                        // ツールチップ文言の組み立て
+                        let tooltipMsg = displayTitle;
+                        if (event.milestone_targets && event.milestone_targets.length >= 2) {
+                            const targetNames = [];
+                            event.milestone_targets.forEach(tid => {
+                                const tSched = getFilteredSchedules().find(s => s.id === tid);
+                                if (tSched) {
+                                    targetNames.push(tSched.title);
                                 }
                             });
-                        }
-
-                        if (event.allocations && Array.isArray(event.allocations)) {
-                            event.allocations.forEach(alloc => {
-                                const hours = parseFloat(alloc.allocated_hours || 0);
-                                if (hours > 0) {
-                                    const d = parseLocalDate(alloc.date);
-                                    if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
-                                    if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
-                                }
-                            });
-                        }
-
-                        // If we have an early start actual date before planned start date
-                        if (actualStartDateObj && actualStartDateObj < startDateObj) {
-                            const earlyStartOffset = Math.max(0, Math.round((actualStartDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
-                            const earlyEndOffset = Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) - 1;
-                            const earlyDurationDays = earlyEndOffset - earlyStartOffset + 1;
-
-                            if (earlyDurationDays > 0) {
-                                const earlyBar = document.createElement('div');
-                                earlyBar.className = 'gantt-bar actual-extension early';
-                                earlyBar.style.left = `${earlyStartOffset * 40 + 8}px`;
-                                earlyBar.style.width = `${earlyDurationDays * 40}px`;
-                                
-                                const earlyStartStr = formatDate(actualStartDateObj);
-                                const dayBeforePlannedStart = new Date(startDateObj.getTime() - (1000 * 60 * 60 * 24));
-                                const earlyEndStr = formatDate(dayBeforePlannedStart);
-                                const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の早期着手期間 (${earlyStartStr} 〜 ${earlyEndStr})`;
-
-                                earlyBar.addEventListener('mouseenter', (e) => {
-                                    showTooltip(e, tooltipMsg);
-                                });
-                                earlyBar.addEventListener('mouseleave', hideTooltip);
-                                earlyBar.addEventListener('click', () => {
-                                    showEventDetail(event, startDateObj);
-                                });
-                                rowBody.appendChild(earlyBar);
+                            if (targetNames.length > 0) {
+                                tooltipMsg += ` (関連タスク: ${targetNames.join(', ')})`;
                             }
                         }
 
-                        // If we have a late finish actual date after planned end date
-                        if (actualEndDateObj && actualEndDateObj > endDateObj) {
-                            const lateStartOffset = Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) + 1;
-                            const lateEndOffset = Math.min(timelineDays.length - 1, Math.round((actualEndDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
-                            const lateDurationDays = lateEndOffset - lateStartOffset + 1;
+                        star.addEventListener('mouseenter', (e) => {
+                            showTooltip(e, escapeHtml(tooltipMsg));
+                        });
+                        star.addEventListener('mouseleave', hideTooltip);
+                        star.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            showEventDetail(event, startDateObj);
+                        });
 
-                            if (lateDurationDays > 0) {
-                                const lateBar = document.createElement('div');
-                                lateBar.className = 'gantt-bar actual-extension late';
-                                lateBar.style.left = `${(endOffset + 1) * 40 - 8}px`;
-                                lateBar.style.width = `${lateDurationDays * 40}px`;
-
-                                const dayAfterPlannedEnd = new Date(endDateObj.getTime() + (1000 * 60 * 60 * 24));
-                                const lateStartStr = formatDate(dayAfterPlannedEnd);
-                                const lateEndStr = formatDate(actualEndDateObj);
-                                const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の超過期間 (${lateStartStr} 〜 ${lateEndStr})`;
-
-                                lateBar.addEventListener('mouseenter', (e) => {
-                                    showTooltip(e, tooltipMsg);
-                                });
-                                lateBar.addEventListener('mouseleave', hideTooltip);
-                                lateBar.addEventListener('click', () => {
-                                    showEventDetail(event, startDateObj);
-                                });
-                                rowBody.appendChild(lateBar);
-                            }
-                        }
-                    }
-
-                    if (startAtStr === endAtStr) {
-                        // 1日未満（当日のみ）の場合は●（ドット）として配置
-                        bar.style.left = `${startOffset * 40 + 12}px`; // 40pxセルの真ん中に配置 (40-16)/2 = 12px
-                        bar.style.width = '16px';
-                        bar.style.height = '16px';
-                        bar.style.borderRadius = '50%';
-                        bar.style.padding = '0';
-                        bar.style.justifyContent = 'center';
-                        bar.innerText = '';
+                        rowBody.appendChild(star);
                     } else {
-                        // 1日以上の場合は通常のバーとして配置
-                        bar.style.left = `${startOffset * 40 + 8}px`;
-                        bar.style.width = `${durationDays * 40 - 16}px`;
-                        bar.innerText = displayTitle;
+                        // 通常の予定/タスク
+                        const bar = document.createElement('div');
+                        bar.className = `gantt-bar ${event.type}`;
+                        
+                        if (isPrivate) {
+                            bar.classList.add('private-schedule');
+                        }
+
+                        if (event.type === 'task') {
+                            // Calculate actual progress
+                            let P_total = 0;
+                            if (event.progress && Array.isArray(event.progress)) {
+                                event.progress.forEach(p => {
+                                    P_total += parseInt(p.progress_percent || 0, 10);
+                                });
+                            }
+                            P_total = Math.min(100, Math.max(0, P_total));
+
+                            if (P_total === 0) {
+                                bar.classList.add('todo');
+                            } else if (P_total >= 100) {
+                                bar.classList.add('done');
+                            } else {
+                                const P_planned = calculatePlannedProgress(startDateObj, endDateObj, today);
+                                bar.classList.add('doing');
+                                if (P_total < P_planned) {
+                                    bar.classList.add('delayed');
+                                } else if (P_total > P_planned) {
+                                    bar.classList.add('ahead');
+                                } else {
+                                    bar.classList.add('onschedule');
+                                }
+                            }
+
+                            // Determine earliest and latest dates with positive progress or allocation
+                            let actualStartDateObj = null;
+                            let actualEndDateObj = null;
+
+                            if (event.progress && Array.isArray(event.progress)) {
+                                event.progress.forEach(p => {
+                                    const pct = parseInt(p.progress_percent || 0, 10);
+                                    if (pct > 0) {
+                                        const d = parseLocalDate(p.date);
+                                        if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
+                                        if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
+                                    }
+                                });
+                            }
+
+                            if (event.allocations && Array.isArray(event.allocations)) {
+                                event.allocations.forEach(alloc => {
+                                    const hours = parseFloat(alloc.allocated_hours || 0);
+                                    if (hours > 0) {
+                                        const d = parseLocalDate(alloc.date);
+                                        if (!actualStartDateObj || d < actualStartDateObj) actualStartDateObj = d;
+                                        if (!actualEndDateObj || d > actualEndDateObj) actualEndDateObj = d;
+                                    }
+                                });
+                            }
+
+                            // If we have an early start actual date before planned start date
+                            if (actualStartDateObj && actualStartDateObj < startDateObj) {
+                                const earlyStartOffset = Math.max(0, Math.round((actualStartDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                                const earlyEndOffset = Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) - 1;
+                                const earlyDurationDays = earlyEndOffset - earlyStartOffset + 1;
+
+                                if (earlyDurationDays > 0) {
+                                    const earlyBar = document.createElement('div');
+                                    earlyBar.className = 'gantt-bar actual-extension early';
+                                    earlyBar.style.left = `${earlyStartOffset * 40 + 8}px`;
+                                    earlyBar.style.width = `${earlyDurationDays * 40}px`;
+                                    
+                                    const earlyStartStr = formatDate(actualStartDateObj);
+                                    const dayBeforePlannedStart = new Date(startDateObj.getTime() - (1000 * 60 * 60 * 24));
+                                    const earlyEndStr = formatDate(dayBeforePlannedStart);
+                                    const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の早期着手期間 (${earlyStartStr} 〜 ${earlyEndStr})`;
+
+                                    earlyBar.addEventListener('mouseenter', (e) => {
+                                        showTooltip(e, tooltipMsg);
+                                    });
+                                    earlyBar.addEventListener('mouseleave', hideTooltip);
+                                    earlyBar.addEventListener('click', () => {
+                                        showEventDetail(event, startDateObj);
+                                    });
+                                    rowBody.appendChild(earlyBar);
+                                }
+                            }
+
+                            // If we have a late finish actual date after planned end date
+                            if (actualEndDateObj && actualEndDateObj > endDateObj) {
+                                const lateStartOffset = Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)) + 1;
+                                const lateEndOffset = Math.min(timelineDays.length - 1, Math.round((actualEndDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                                const lateDurationDays = lateEndOffset - lateStartOffset + 1;
+
+                                if (lateDurationDays > 0) {
+                                    const lateBar = document.createElement('div');
+                                    lateBar.className = 'gantt-bar actual-extension late';
+                                    lateBar.style.left = `${(endOffset + 1) * 40 - 8}px`;
+                                    lateBar.style.width = `${lateDurationDays * 40}px`;
+
+                                    const dayAfterPlannedEnd = new Date(endDateObj.getTime() + (1000 * 60 * 60 * 24));
+                                    const lateStartStr = formatDate(dayAfterPlannedEnd);
+                                    const lateEndStr = formatDate(actualEndDateObj);
+                                    const tooltipMsg = `${escapeHtml(displayTitle)}: 予定外の超過期間 (${lateStartStr} 〜 ${lateEndStr})`;
+
+                                    lateBar.addEventListener('mouseenter', (e) => {
+                                        showTooltip(e, tooltipMsg);
+                                    });
+                                    lateBar.addEventListener('mouseleave', hideTooltip);
+                                    lateBar.addEventListener('click', () => {
+                                        showEventDetail(event, startDateObj);
+                                    });
+                                    rowBody.appendChild(lateBar);
+                                }
+                            }
+
+                            // Draw task-level inline milestones
+                            const targetId = event.id;
+                            const inlineMilestones = getFilteredSchedules().filter(sched => 
+                                sched.type === 'milestone' && 
+                                sched.milestone_targets && 
+                                sched.milestone_targets.length === 1 && 
+                                sched.milestone_targets[0] === targetId
+                            );
+
+                            inlineMilestones.forEach(m => {
+                                if (m.start_at) {
+                                    const mDateStr = m.start_at.substring(0, 10);
+                                    const mDateObj = parseLocalDate(mDateStr);
+                                    const mOffset = Math.round((mDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24));
+                                    if (mOffset >= 0 && mOffset < timelineDays.length) {
+                                        const mStar = document.createElement('div');
+                                        mStar.className = 'gantt-milestone-star';
+                                        mStar.innerText = '★';
+                                        mStar.style.left = `${mOffset * 40 + 12}px`;
+                                        mStar.style.top = `calc(50% - 8px)`;
+                                        
+                                        const mTitle = parseInt(m.is_public) === 0 ? `🔒 [非公開] ${m.title}` : m.title;
+                                        
+                                        mStar.addEventListener('mouseenter', (e) => {
+                                            showTooltip(e, escapeHtml(mTitle));
+                                        });
+                                        mStar.addEventListener('mouseleave', hideTooltip);
+                                        mStar.addEventListener('click', (e) => {
+                                            e.stopPropagation();
+                                            showEventDetail(m, mDateObj);
+                                        });
+                                        rowBody.appendChild(mStar);
+                                    }
+                                }
+                            });
+                        }
+
+                        if (startAtStr === endAtStr) {
+                            // 1日未満（当日のみ）の場合は●（ドット）として配置
+                            bar.style.left = `${startOffset * 40 + 12}px`; // 40pxセルの真ん中に配置 (40-16)/2 = 12px
+                            bar.style.width = '16px';
+                            bar.style.height = '16px';
+                            bar.style.borderRadius = '50%';
+                            bar.style.padding = '0';
+                            bar.style.justifyContent = 'center';
+                            bar.innerText = '';
+                        } else {
+                            // 1日以上の場合は通常のバーとして配置
+                            bar.style.left = `${startOffset * 40 + 8}px`;
+                            bar.style.width = `${durationDays * 40 - 16}px`;
+                            bar.innerText = displayTitle;
+                        }
+
+                        // ホバー時にツールチップでタイトルを表示
+                        bar.addEventListener('mouseenter', (e) => {
+                            showTooltip(e, escapeHtml(displayTitle));
+                        });
+                        bar.addEventListener('mouseleave', hideTooltip);
+
+                        bar.addEventListener('click', () => {
+                            showEventDetail(event, startDateObj);
+                        });
+
+                        rowBody.appendChild(bar);
                     }
-
-                    // ホバー時にツールチップでタイトルを表示
-                    bar.addEventListener('mouseenter', (e) => {
-                        showTooltip(e, escapeHtml(displayTitle));
-                    });
-                    bar.addEventListener('mouseleave', hideTooltip);
-
-                    bar.addEventListener('click', () => {
-                        showEventDetail(event, startDateObj);
-                    });
-
-                    rowBody.appendChild(bar);
                 }
 
                 rightPanel.appendChild(rowBody);

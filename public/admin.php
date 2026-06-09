@@ -119,9 +119,9 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
             $recurrence_mode = $_POST['recurrence_mode'] ?? 'single';
             $type = $_POST['type'] ?? 'simple';
 
-            // 日時は memo タイプなら強制 null
+            // 日時は memo タイプなら強制 null、マイルストーンなら終了日を開始日と同じにする
             $start_at = ($type === 'memo') ? null : ($_POST['start_at'] ?: null);
-            $end_at = ($type === 'memo') ? null : ($_POST['end_at'] ?: null);
+            $end_at = ($type === 'memo') ? null : (($type === 'milestone') ? $start_at : ($_POST['end_at'] ?: null));
 
             $schedule = [
                 'id' => $id,
@@ -170,6 +170,16 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 }
             }
 
+            // マイルストーン関連タスクの取得
+            $milestone_targets = [];
+            if ($schedule['type'] === 'milestone' && !empty($_POST['milestone_targets']) && is_array($_POST['milestone_targets'])) {
+                foreach ($_POST['milestone_targets'] as $target_id) {
+                    if (!empty($target_id)) {
+                        $milestone_targets[] = $target_id;
+                    }
+                }
+            }
+
             // 繰り返し設定 (新規登録時のみ有効)
             $recurrence = $_POST['recurrence'] ?? 'none';
             $save_success = false;
@@ -178,7 +188,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                 // シリーズ全体を更新
                 $save_success = $scheduleRepo->updateSeries($existing_group_id, $schedule);
                 // 現在の選択予定（固有の日付などを持つ）も更新
-                $scheduleRepo->save($schedule, $allocations, $progress);
+                $scheduleRepo->save($schedule, $allocations, $progress, $milestone_targets);
             } else {
                 // 新規またはこの予定のみ
                 if (!$is_new && $recurrence_mode === 'single') {
@@ -192,7 +202,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                     $schedule['recurrence_group_id'] = $recurrence_group_id;
 
                     // オリジナルを保存
-                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress);
+                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress, $milestone_targets);
 
                     if ($save_success) {
                         // コピーを生成
@@ -238,7 +248,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                                     $copy_schedule['end_at'] = $copy_end;
                                     $copy_schedule['recurrence_group_id'] = $recurrence_group_id;
 
-                                    $scheduleRepo->save($copy_schedule, [], []); // コピーには日別配分・進捗を引き継がない
+                                    $scheduleRepo->save($copy_schedule, [], [], []); // コピーには日別配分・進捗・マイルストーン関連を引き継がない
                                 }
                                 $currentDate->modify('+1 day');
                             }
@@ -248,7 +258,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                     }
                 } else {
                     // 通常の単一保存
-                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress);
+                    $save_success = $scheduleRepo->save($schedule, $allocations, $progress, $milestone_targets);
                 }
             }
 
@@ -843,6 +853,7 @@ function h(string $str): string {
                                         <option value="simple">簡易予定 (simple)</option>
                                         <option value="period">期間予定 (period)</option>
                                         <option value="task">個人タスク (task)</option>
+                                        <option value="milestone">マイルストーン (milestone)</option>
                                         <option value="memo">やることメモ (memo)</option>
                                     </select>
                                     <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ 簡易予定：日時のみのシンプルな予定。期間予定：複数日にまたがる予定。個人タスク：時間枠に割り当て、重み（所要時間）を集計する進捗管理用の予定。やることメモ：日付のないTo-Doリスト項目。</p>
@@ -859,7 +870,7 @@ function h(string $str): string {
                                     <label for="sched-start">開始日時</label>
                                     <input type="datetime-local" id="sched-start" name="start_at" onchange="updateAllocationForm()">
                                 </div>
-                                <div class="form-group">
+                                <div class="form-group" id="sched-end-group">
                                     <label for="sched-end">終了日時</label>
                                     <input type="datetime-local" id="sched-end" name="end_at" onchange="updateAllocationForm()">
                                 </div>
@@ -929,6 +940,21 @@ function h(string $str): string {
                                             <?php endforeach; ?>
                                         </select>
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- マイルストーン専用フィールド -->
+                            <div id="milestone-fields" style="display: none; border-top: 1px dashed var(--panel-border); padding-top: 1rem; margin-top: 1rem;">
+                                <div class="form-group">
+                                    <label for="milestone-targets">関連付けるタスク (複数選択可、未選択時は独立行)</label>
+                                    <select id="milestone-targets" name="milestone_targets[]" multiple style="width: 100%; height: 120px; padding: 0.5rem; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-primary);">
+                                        <?php foreach ($allSchedules as $s): ?>
+                                            <?php if ($s['type'] === 'task' && !(int)$s['is_deleted']): ?>
+                                                <option value="<?php echo h($s['id']); ?>"><?php echo h($s['title']); ?></option>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ Windowsの場合「Ctrlキー」、Macの場合「Cmdキー」を押しながらクリックすることで複数選択・解除ができます。</p>
                                 </div>
                             </div>
 
@@ -1370,18 +1396,28 @@ function h(string $str): string {
             element.classList.add('active');
         }
 
-        // 予定フォーム項目の表示制御 (タスク選択時のみ専用項目を表示、新規かつタスク・メモ外のみ繰り返し設定表示、メモ時は日付非表示)
+        // 予定フォーム項目の表示制御 (タスク選択時のみ専用項目を表示、新規かつタスク・メモ・マイルストーン外のみ繰り返し設定表示、メモ時は日付非表示)
         function toggleFormFields() {
             const id = document.getElementById('sched-id').value;
             const type = document.getElementById('sched-type').value;
             const taskFields = document.getElementById('task-fields');
+            const milestoneFields = document.getElementById('milestone-fields');
             const recurrenceField = document.getElementById('recurrence-field');
             const dateFields = document.getElementById('sched-date-fields');
+            const endGroup = document.getElementById('sched-end-group');
             
             if (type === 'task') {
                 taskFields.style.display = 'block';
             } else {
                 taskFields.style.display = 'none';
+            }
+
+            if (type === 'milestone') {
+                if (milestoneFields) milestoneFields.style.display = 'block';
+                if (endGroup) endGroup.style.display = 'none';
+            } else {
+                if (milestoneFields) milestoneFields.style.display = 'none';
+                if (endGroup) endGroup.style.display = 'block';
             }
             
             // メモの場合は日付指定行を非表示にする
@@ -1391,8 +1427,8 @@ function h(string $str): string {
                 dateFields.style.display = 'flex';
             }
             
-            // 新規登録かつタスク・メモ以外の場合のみ繰り返しプルダウンを表示
-            if (!id && type !== 'task' && type !== 'memo') {
+            // 新規登録かつタスク・メモ・マイルストーン以外の場合のみ繰り返しプルダウンを表示
+            if (!id && type !== 'task' && type !== 'memo' && type !== 'milestone') {
                 recurrenceField.style.display = 'block';
             } else {
                 recurrenceField.style.display = 'none';
@@ -1643,6 +1679,18 @@ function h(string $str): string {
                 });
             }
 
+            // milestone_targets データのロード
+            const milestoneTargetsSelect = document.getElementById('milestone-targets');
+            if (milestoneTargetsSelect) {
+                Array.from(milestoneTargetsSelect.options).forEach(opt => opt.selected = false);
+                if (sched.type === 'milestone' && Array.isArray(sched.milestone_targets)) {
+                    sched.milestone_targets.forEach(targetId => {
+                        const opt = Array.from(milestoneTargetsSelect.options).find(o => o.value === targetId);
+                        if (opt) opt.selected = true;
+                    });
+                }
+            }
+
             if (sched.type === 'task') {
                 document.getElementById('sched-status').value = sched.status || 'todo';
                 if (document.getElementById('sched-status-hidden')) {
@@ -1696,6 +1744,13 @@ function h(string $str): string {
             
             currentAllocations = {};
             currentProgress = {};
+
+            // milestone_targets の初期化
+            const milestoneTargetsSelect = document.getElementById('milestone-targets');
+            if (milestoneTargetsSelect) {
+                Array.from(milestoneTargetsSelect.options).forEach(opt => opt.selected = false);
+            }
+
             document.getElementById('edit-scope-field').style.display = 'none';
             
             toggleFormFields();

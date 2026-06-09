@@ -74,5 +74,14 @@ CREATE TABLE IF NOT EXISTS `schedule_progress` (
   FOREIGN KEY (`schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE
 );
 
+-- 7. schedule_milestone_relations テーブル (マイルストーンとタスクの関連付け用)
+CREATE TABLE IF NOT EXISTS `schedule_milestone_relations` (
+  `milestone_id` TEXT NOT NULL,
+  `target_schedule_id` TEXT NOT NULL,
+  PRIMARY KEY (`milestone_id`, `target_schedule_id`),
+  FOREIGN KEY (`milestone_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (`target_schedule_id`) REFERENCES `schedules` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 -- 初期データの登録 (最終同期時刻の初期化)
 INSERT OR IGNORE INTO `sync_metadata` (`key`, `value`) VALUES ('last_synced_at', '1970-01-01 00:00:00');

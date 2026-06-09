@@ -22,7 +22,7 @@ class ScheduleRepository {
      * @param array $allocations 日別作業時間配分データの配列
      * @return bool 処理結果（成功時 true、失敗時 false）
      */
-    public function save(array $schedule, array $allocations = [], array $progress = []): bool {
+    public function save(array $schedule, array $allocations = [], array $progress = [], array $milestoneTargets = []): bool {
         // 必須フィールドの検証
         if (empty($schedule['id']) || empty($schedule['title'])) {
             return false;
@@ -153,6 +153,31 @@ class ScheduleRepository {
                 }
             }
 
+            // 子レコード (schedule_milestone_relations) の保存処理
+            $delMilestoneSql = "DELETE FROM schedule_milestone_relations WHERE milestone_id = :milestone_id";
+            $delMilestoneStmt = $this->db->prepare($delMilestoneSql);
+            $delMilestoneStmt->execute([':milestone_id' => $schedule['id']]);
+
+            if (($schedule['type'] ?? 'simple') === 'milestone') {
+                if (!empty($milestoneTargets)) {
+                    $insMilestoneSql = "INSERT INTO schedule_milestone_relations (
+                                            milestone_id, target_schedule_id
+                                        ) VALUES (
+                                            :milestone_id, :target_schedule_id
+                                        )";
+                    $insMilestoneStmt = $this->db->prepare($insMilestoneSql);
+
+                    foreach ($milestoneTargets as $targetId) {
+                        if (!empty($targetId)) {
+                            $insMilestoneStmt->execute([
+                                ':milestone_id' => $schedule['id'],
+                                ':target_schedule_id' => $targetId
+                            ]);
+                        }
+                    }
+                }
+            }
+
             $this->db->commit();
             return true;
         } catch (\Exception $e) {
@@ -215,10 +240,22 @@ class ScheduleRepository {
             foreach ($allProgress as $prog) {
                 $progMap[$prog['schedule_id']][] = $prog;
             }
+
+            // milestone targets マッピング
+            $relSql = "SELECT * FROM schedule_milestone_relations WHERE milestone_id IN ($placeholders)";
+            $relStmt = $this->db->prepare($relSql);
+            $relStmt->execute($ids);
+            $allRels = $relStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $relMap = [];
+            foreach ($allRels as $rel) {
+                $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
+            }
             
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
+                $row['milestone_targets'] = $relMap[$row['id']] ?? [];
             }
         }
 
@@ -267,10 +304,22 @@ class ScheduleRepository {
             foreach ($allProgress as $prog) {
                 $progMap[$prog['schedule_id']][] = $prog;
             }
+
+            // milestone targets マッピング
+            $relSql = "SELECT * FROM schedule_milestone_relations WHERE milestone_id IN ($placeholders)";
+            $relStmt = $this->db->prepare($relSql);
+            $relStmt->execute($ids);
+            $allRels = $relStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $relMap = [];
+            foreach ($allRels as $rel) {
+                $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
+            }
             
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
+                $row['milestone_targets'] = $relMap[$row['id']] ?? [];
             }
         }
 
@@ -316,10 +365,22 @@ class ScheduleRepository {
             foreach ($allProgress as $prog) {
                 $progMap[$prog['schedule_id']][] = $prog;
             }
+
+            // milestone targets マッピング
+            $relSql = "SELECT * FROM schedule_milestone_relations WHERE milestone_id IN ($placeholders)";
+            $relStmt = $this->db->prepare($relSql);
+            $relStmt->execute($ids);
+            $allRels = $relStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $relMap = [];
+            foreach ($allRels as $rel) {
+                $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
+            }
             
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
+                $row['milestone_targets'] = $relMap[$row['id']] ?? [];
             }
         }
 
