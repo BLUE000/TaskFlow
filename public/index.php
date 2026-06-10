@@ -2017,6 +2017,14 @@ function h(string $str): string {
                         const startDateObj = parseLocalDate(startAtStr);
                         const endDateObj = parseLocalDate(endAtStr);
 
+                        // 完了済み（done）かつ終了日が過去 → 稲妻線の頂点に含めない
+                        const isDoneAndPast = P_total >= 100 && endDateObj < today;
+                        if (isDoneAndPast) {
+                            // x = x_today のまま（稲妻線をその行でまっすぐ通過）
+                            points.push(`${x},${y}`);
+                            return; // 進捗ドットも描かない
+                        }
+
                         const actualTotalDays = Math.round((endDateObj - startDateObj) / (1000 * 60 * 60 * 24)) + 1;
                         const progressDays = (P_total / 100) * actualTotalDays;
                         const progressDate = new Date(startDateObj.getTime() + progressDays * (1000 * 60 * 60 * 24));
