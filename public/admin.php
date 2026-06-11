@@ -285,6 +285,13 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
                     $scheduleRepo->saveSegments($id, $segments);
                 }
 
+                // 先行タスクの保存
+                $predecessorIds = [];
+                if (!empty($_POST['predecessors']) && is_array($_POST['predecessors'])) {
+                    $predecessorIds = array_filter($_POST['predecessors'], function($v) { return !empty($v); });
+                }
+                $scheduleRepo->savePredecessors($id, array_values($predecessorIds));
+
                 // Discord通知の送信処理
                 if (!empty($schedule['discord_webhook_id'])) {
                     $whSql = "SELECT * FROM webhooks WHERE id = :id AND is_deleted = 0";
@@ -478,6 +485,7 @@ if ($is_logged_in && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form
 $allSchedules = $is_logged_in ? $scheduleRepo->findAll() : [];
 $allTimeSlots = $is_logged_in ? $timeSlotRepo->findAllActive() : [];
 $allWebhooks = $is_logged_in ? $webhookRepo->findAllActive() : [];
+$allPredecessorRelations = $is_logged_in ? $scheduleRepo->findAllPredecessorRelations() : [];
 
 // XSSエスケープ
 function h(string $str): string {
@@ -999,6 +1007,20 @@ function h(string $str): string {
                                     <!-- JavaScript で動的に行を追加 -->
                                 </div>
                                 <button type="button" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.9rem; margin-top: 0.5rem;" onclick="addSegmentRow()">＋ 期間を追加</button>
+                            </div>
+
+                            <!-- 先行タスク（依存関係）フィールド -->
+                            <div id="predecessor-fields" style="border-top: 1px dashed var(--panel-border); padding-top: 1rem; margin-top: 1rem;">
+                                <label for="sched-predecessors" style="margin-bottom: 0.5rem; display:block; font-weight: 600;">先行タスク（依存関係）</label>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.75rem; line-height: 1.4;">※ このタスクが開始する前に完了していなければならない先行タスク（複数選択可）を選択します。</p>
+                                <select id="sched-predecessors" name="predecessors[]" multiple style="width: 100%; height: 120px; padding: 0.5rem; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-primary);">
+                                    <?php foreach ($allSchedules as $s): ?>
+                                        <?php if (!(int)$s['is_deleted']): ?>
+                                            <option value="<?php echo h($s['id']); ?>"><?php echo h($s['title']); ?> (<?php echo h($s['type']); ?>)</option>
+                                        <?php endif; ?>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; line-height: 1.4;">※ Windowsの場合「Ctrlキー」、Macの場合「Cmdキー」を押しながらクリックすることで複数選択・解除ができます。</p>
                             </div>
 
                             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem;">
@@ -1839,6 +1861,23 @@ function h(string $str): string {
                 editScopeField.style.display = 'none';
             }
 
+            // 先行タスクのロード
+            const predecessorSelect = document.getElementById('sched-predecessors');
+            if (predecessorSelect) {
+                Array.from(predecessorSelect.options).forEach(opt => {
+                    opt.selected = sched.predecessors && sched.predecessors.includes(opt.value);
+                    // 自分自身を先行タスクに設定できないように非表示（または無効化）にする
+                    if (opt.value === sched.id) {
+                        opt.style.display = 'none';
+                        opt.disabled = true;
+                        opt.selected = false;
+                    } else {
+                        opt.style.display = 'block';
+                        opt.disabled = false;
+                    }
+                });
+            }
+
             // セグメントのロード
             loadSegments(sched.segments || []);
 
@@ -1877,6 +1916,16 @@ function h(string $str): string {
 
             // セグメントのクリア
             loadSegments([]);
+
+            // 先行タスクのクリア
+            const predecessorSelect = document.getElementById('sched-predecessors');
+            if (predecessorSelect) {
+                Array.from(predecessorSelect.options).forEach(opt => {
+                    opt.selected = false;
+                    opt.style.display = 'block';
+                    opt.disabled = false;
+                });
+            }
 
             document.getElementById('edit-scope-field').style.display = 'none';
             

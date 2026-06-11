@@ -1,4 +1,4 @@
-# TaskFlow 基本設計書 (Basic Design)
+﻿# TaskFlow 基本設計書 (Basic Design)
 
 本システムは、PHP 8.1 / MySQL 8.0 で構成されたWebアプリケーションと、C++ / Qt 6 で構成されたデスクトップGUIアプリケーションが、データベースを共有・同期して動作するハイブリッド構成です。
 データの暗号化および難読化には `TransCipher` ライブラリ（C++版/PHP版）を使用し、機密データを保護します。
@@ -343,3 +343,56 @@ Webアクセスによるシステム公開に伴い、不正アクセスや改�
 * **詳細エラーメッセージの非表示 (情報漏洩対策)**:
   * データベース接続エラーやプログラム例外の発生時、生のSQLやファイルの絶対パス、スタックトレースなどを画面上（HTMLやAPIレスポンス）に直接出力することを禁止します。
   * 画面上には「システムエラーが発生しました」という抽象メッセージのみを返し、詳細なエラー情報はサーバー上のセキュアなエラーログファイルにのみ出力するよう例外ハンドリングを徹底します。
+
+---
+
+## 9. 先行タスク機能 基本設計
+
+### 9.1. DBスキーマ追加
+
+`sql
+-- MySQL版
+CREATE TABLE IF NOT EXISTS schedule_predecessors (
+  id             VARCHAR(36) NOT NULL,
+  schedule_id    VARCHAR(36) NOT NULL COMMENT '後続タスクのschedule.id',
+  predecessor_id VARCHAR(36) NOT NULL COMMENT '先行タスクのschedule.id',
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_pred (schedule_id, predecessor_id),
+  CONSTRAINT k_pred_schedule     FOREIGN KEY (schedule_id)    REFERENCES schedules (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT k_pred_predecessor  FOREIGN KEY (predecessor_id) REFERENCES schedules (id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`
+
+`sql
+-- SQLite版
+CREATE TABLE IF NOT EXISTS schedule_predecessors (
+  id             TEXT NOT NULL PRIMARY KEY,
+  schedule_id    TEXT NOT NULL,
+  predecessor_id TEXT NOT NULL,
+  UNIQUE (schedule_id, predecessor_id),
+  FOREIGN KEY (schedule_id)    REFERENCES schedules (id) ON DELETE CASCADE,
+  FOREIGN KEY (predecessor_id) REFERENCES schedules (id) ON DELETE CASCADE
+);
+`
+
+### 9.2. RepositoryLayer
+
+ScheduleRepository に以下のメソッドを追加する。
+
+| メソッド | 説明 |
+|---|---|
+| savePredecessors(string , array ): bool | 先行タスクIDリストを保存（既存全削除→再挿入） |
+| indPredecessorsByScheduleId(string ): array | 指定スケジュールの先行タスク一覧を取得 |
+| indSuccessorsByScheduleId(string ): array | 指定スケジュールの後続タスク一覧を取得 |
+
+### 9.3. UIレイヤー (admin.php)
+
+- スケジュール編集フォームに「先行タスク」のマルチセレクトUIを追加する。
+- save_schedule アクション処理内で $_POST['predecessors']（ID配列）を受け取り savePredecessors() を呼ぶ。
+- 循環依存チェックはフォームの JavaScript でも簡易警告を出すが、PHP側でも基本的なバリデーション（自己参照禁止）を行う。
+
+### 9.4. 表示レイヤー (index.php)
+
+- PHPでページ初期化時に全スケジュールの schedule_predecessors データを取得し、JSON形式でJavaScriptに渡す。
+- JavaScriptのガントチャート描画関数内で、依存関係ペアに対してSVG <line> または <path> で矢印を描画する。
+- 矢印スタイル: 先行タスクバー右端 → 後続タスクバー左端、色は半透明グレー/アクセントカラー。

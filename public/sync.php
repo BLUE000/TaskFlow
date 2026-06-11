@@ -125,6 +125,21 @@ try {
                                       ) VALUES (
                                         :id, :schedule_id, :date, :time_slot_id, :allocated_hours, NOW(), NOW(), 0
                                       )");
+        
+        $delSegStmt = $db->prepare("UPDATE schedule_segments SET is_deleted = 1, updated_at = NOW() WHERE schedule_id = :schedule_id AND is_deleted = 0");
+        $insSegStmt = $db->prepare("INSERT INTO schedule_segments (
+                                        id, schedule_id, segment_order, start_at, end_at, created_at, updated_at, is_deleted
+                                      ) VALUES (
+                                        :id, :schedule_id, :segment_order, :start_at, :end_at, :created_at, :updated_at, 0
+                                      ) ON DUPLICATE KEY UPDATE
+                                        segment_order = VALUES(segment_order),
+                                        start_at = VALUES(start_at),
+                                        end_at = VALUES(end_at),
+                                        updated_at = VALUES(updated_at),
+                                        is_deleted = VALUES(is_deleted)");
+
+        $delPredStmt = $db->prepare("DELETE FROM schedule_predecessors WHERE schedule_id = :schedule_id");
+        $insPredStmt = $db->prepare("INSERT INTO schedule_predecessors (id, schedule_id, predecessor_id) VALUES (:id, :schedule_id, :predecessor_id)");
 
         foreach ($pushedSchedules as $s) {
             $pushedStatus = $s['status'] ?? 'todo';
@@ -182,6 +197,49 @@ try {
                         ':date' => $alloc['date'],
                         ':time_slot_id' => $alloc['time_slot_id'],
                         ':allocated_hours' => (double)$alloc['allocated_hours']
+                    ]);
+                }
+            }
+
+            // segmentsの更新
+            if (isset($s['segments'])) {
+                $delSegStmt->execute([':schedule_id' => $s['id']]);
+                foreach ($s['segments'] as $seg) {
+                    $segId = $seg['id'];
+                    if (empty($segId)) {
+                        $bytes = random_bytes(16);
+                        $bytes[6] = chr(ord($bytes[6]) & 0x0f | 0x40);
+                        $bytes[8] = chr(ord($bytes[8]) & 0x3f | 0x80);
+                        $segId = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+                    }
+                    $insSegStmt->execute([
+                        ':id' => $segId,
+                        ':schedule_id' => $s['id'],
+                        ':segment_order' => (int)$seg['segment_order'],
+                        ':start_at' => $seg['start_at'],
+                        ':end_at' => $seg['end_at'],
+                        ':created_at' => $seg['created_at'] ?? date('Y-m-d H:i:s'),
+                        ':updated_at' => $seg['updated_at'] ?? date('Y-m-d H:i:s'),
+                    ]);
+                }
+            }
+
+            // predecessorsの更新
+            if (isset($s['predecessors'])) {
+                $delPredStmt->execute([':schedule_id' => $s['id']]);
+                foreach ($s['predecessors'] as $predId) {
+                    if ($predId === $s['id']) {
+                        continue;
+                    }
+                    $bytes = random_bytes(16);
+                    $bytes[6] = chr(ord($bytes[6]) & 0x0f | 0x40);
+                    $bytes[8] = chr(ord($bytes[8]) & 0x3f | 0x80);
+                    $linkId = vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
+
+                    $insPredStmt->execute([
+                        ':id' => $linkId,
+                        ':schedule_id' => $s['id'],
+                        ':predecessor_id' => $predId,
                     ]);
                 }
             }

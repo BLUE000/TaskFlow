@@ -262,11 +262,27 @@ class ScheduleRepository {
                 $segMap[$seg['schedule_id']][] = $seg;
             }
 
+            // predecessors マッピング
+            try {
+                $predSql = "SELECT * FROM schedule_predecessors WHERE schedule_id IN ($placeholders)";
+                $predStmt = $this->db->prepare($predSql);
+                $predStmt->execute($ids);
+                $allPredecessors = $predStmt->fetchAll(PDO::FETCH_ASSOC);
+                $predMap = [];
+                foreach ($allPredecessors as $pred) {
+                    $predMap[$pred['schedule_id']][] = $pred['predecessor_id'];
+                }
+            } catch (\PDOException $e) {
+                error_log("Predecessors table query failed: " . $e->getMessage());
+                $predMap = [];
+            }
+
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
                 $row['milestone_targets'] = $relMap[$row['id']] ?? [];
                 $row['segments'] = $segMap[$row['id']] ?? [];
+                $row['predecessors'] = $predMap[$row['id']] ?? [];
             }
         }
 
@@ -337,11 +353,27 @@ class ScheduleRepository {
                 $segMap2[$seg['schedule_id']][] = $seg;
             }
 
+            // predecessors マッピング
+            try {
+                $predSql2 = "SELECT * FROM schedule_predecessors WHERE schedule_id IN ($placeholders)";
+                $predStmt2 = $this->db->prepare($predSql2);
+                $predStmt2->execute($ids);
+                $allPredecessors2 = $predStmt2->fetchAll(PDO::FETCH_ASSOC);
+                $predMap2 = [];
+                foreach ($allPredecessors2 as $pred) {
+                    $predMap2[$pred['schedule_id']][] = $pred['predecessor_id'];
+                }
+            } catch (\PDOException $e) {
+                error_log("Predecessors table query failed: " . $e->getMessage());
+                $predMap2 = [];
+            }
+
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
                 $row['milestone_targets'] = $relMap[$row['id']] ?? [];
                 $row['segments'] = $segMap2[$row['id']] ?? [];
+                $row['predecessors'] = $predMap2[$row['id']] ?? [];
             }
         }
 
@@ -398,11 +430,38 @@ class ScheduleRepository {
             foreach ($allRels as $rel) {
                 $relMap[$rel['milestone_id']][] = $rel['target_schedule_id'];
             }
+
+            // segments マッピング
+            $segSql3 = "SELECT * FROM schedule_segments WHERE schedule_id IN ($placeholders) AND is_deleted = 0 ORDER BY segment_order ASC";
+            $segStmt3 = $this->db->prepare($segSql3);
+            $segStmt3->execute($ids);
+            $allSegments3 = $segStmt3->fetchAll(PDO::FETCH_ASSOC);
+            $segMap3 = [];
+            foreach ($allSegments3 as $seg) {
+                $segMap3[$seg['schedule_id']][] = $seg;
+            }
+
+            // predecessors マッピング
+            try {
+                $predSql3 = "SELECT * FROM schedule_predecessors WHERE schedule_id IN ($placeholders)";
+                $predStmt3 = $this->db->prepare($predSql3);
+                $predStmt3->execute($ids);
+                $allPredecessors3 = $predStmt3->fetchAll(PDO::FETCH_ASSOC);
+                $predMap3 = [];
+                foreach ($allPredecessors3 as $pred) {
+                    $predMap3[$pred['schedule_id']][] = $pred['predecessor_id'];
+                }
+            } catch (\PDOException $e) {
+                error_log("Predecessors table query failed: " . $e->getMessage());
+                $predMap3 = [];
+            }
             
             foreach ($results as &$row) {
                 $row['allocations'] = $allocMap[$row['id']] ?? [];
                 $row['progress'] = $progMap[$row['id']] ?? [];
                 $row['milestone_targets'] = $relMap[$row['id']] ?? [];
+                $row['segments'] = $segMap3[$row['id']] ?? [];
+                $row['predecessors'] = $predMap3[$row['id']] ?? [];
             }
         }
 
@@ -582,4 +641,111 @@ class ScheduleRepository {
         $stmt->execute([':schedule_id' => $scheduleId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
+    /**
+     * 先行タスクIDリストを保存（既存全削除→再挿入）
+     * 自己参照（自分自身を先行タスクに設定）は除外する。
+     *
+     * @param string   後続タスクのschedule.id
+     * @param array   先行タスクIDの配列（空配列なら全削除のみ）
+     * @return bool 成功時 true、失敗時 false
+     */
+    public function savePredecessors(string $scheduleId, array $predecessorIds): bool {
+        try {
+            $this->db->beginTransaction();
+
+            // 既存の先行タスク設定を全削除
+            $delSql = "DELETE FROM schedule_predecessors WHERE schedule_id = :schedule_id";
+            $delStmt = $this->db->prepare($delSql);
+            $delStmt->execute([':schedule_id' => $scheduleId]);
+
+            // 新しい先行タスクを挿入（自己参照を除外）
+            if (!empty($predecessorIds)) {
+                $insSql = "INSERT INTO schedule_predecessors (id, schedule_id, predecessor_id)
+                           VALUES (:id, :schedule_id, :predecessor_id)";
+                $insStmt = $this->db->prepare($insSql);
+
+                foreach ($predecessorIds as $predId) {
+                    // 自己参照を防止
+                    if ($predId === $scheduleId) {
+                        continue;
+                    }
+                    $insStmt->execute([
+                        ':id'             => $this->generate_uuidv4(),
+                        ':schedule_id'    => $scheduleId,
+                        ':predecessor_id' => $predId,
+                    ]);
+                }
+            }
+
+            $this->db->commit();
+            return true;
+        } catch (\Exception $e) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            error_log("savePredecessors failed: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 指定スケジュールの先行タスク一覧を取得
+     *
+     * @param string $scheduleId 後続タスクのschedule.id
+     * @return array 先行タスクデータの配列（タイトル復号済み）
+     */
+    public function findPredecessorsByScheduleId(string $scheduleId): array {
+        $sql = "SELECT p.predecessor_id, s.title, s.start_at, s.end_at, s.type, s.status
+                 FROM schedule_predecessors p
+                 JOIN schedules s ON p.predecessor_id = s.id
+                 WHERE p.schedule_id = :schedule_id AND s.is_deleted = 0
+                 ORDER BY s.start_at ASC";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':schedule_id' => $scheduleId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        foreach ($rows as &$row) {
+            $row['title'] = CryptoUtil::decrypt($row['title']);
+        }
+        return $rows;
+    }
+
+    /**
+     * 指定スケジュールの後続タスク一覧を取得
+     *
+     * @param string $scheduleId 先行タスクのschedule.id
+     * @return array 後続タスクデータの配列（タイトル復号済み）
+     */
+    public function findSuccessorsByScheduleId(string $scheduleId): array {
+        $sql = "SELECT p.schedule_id, s.title, s.start_at, s.end_at, s.type, s.status
+                 FROM schedule_predecessors p
+                 JOIN schedules s ON p.schedule_id = s.id
+                 WHERE p.predecessor_id = :predecessor_id AND s.is_deleted = 0
+                 ORDER BY s.start_at ASC";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':predecessor_id' => $scheduleId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+
+        foreach ($rows as &$row) {
+            $row['title'] = CryptoUtil::decrypt($row['title']);
+        }
+        return $rows;
+    }
+
+    /**
+     * 全先行タスク依存関係ペアを取得（ガントチャート描画用）
+     *
+     * @return array [{schedule_id, predecessor_id}, ...] の配列
+     */
+    public function findAllPredecessorRelations(): array {
+        $sql = "SELECT p.schedule_id, p.predecessor_id
+                 FROM schedule_predecessors p
+                 JOIN schedules s1 ON p.schedule_id = s1.id
+                 JOIN schedules s2 ON p.predecessor_id = s2.id
+                 WHERE s1.is_deleted = 0 AND s2.is_deleted = 0";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute();
+        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+    }
+
 }

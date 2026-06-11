@@ -88,6 +88,105 @@ private slots:
         QVERIFY(deleted.is_deleted);
     }
 
+    void testSegmentsAndPredecessors() {
+        LocalStorage storage;
+        
+        // 先行タスク（依存先）となるスケジュールをあらかじめ登録しておく（外部キー制約のクリア）
+        Schedule p1;
+        p1.id = "predecessor-uuid-1";
+        p1.title = "Predecessor 1";
+        p1.type = "task";
+        p1.weight = 1.0;
+        p1.is_deleted = false;
+        QVERIFY(storage.saveSchedule(p1));
+
+        Schedule p2;
+        p2.id = "predecessor-uuid-2";
+        p2.title = "Predecessor 2";
+        p2.type = "task";
+        p2.weight = 1.0;
+        p2.is_deleted = false;
+        QVERIFY(storage.saveSchedule(p2));
+
+        Schedule p3;
+        p3.id = "predecessor-uuid-3";
+        p3.title = "Predecessor 3";
+        p3.type = "task";
+        p3.weight = 1.0;
+        p3.is_deleted = false;
+        QVERIFY(storage.saveSchedule(p3));
+
+        // 1. Create a schedule with segments and predecessors
+        Schedule s;
+        s.id = "test-sched-seg-pred-123";
+        s.title = "Task with Segments and Predecessors";
+        s.type = "period";
+        s.weight = 2.0;
+        s.is_public = false;
+        s.is_deleted = false;
+        s.updated_at = QDateTime::currentDateTime();
+
+        // Add 2 segments
+        Segment seg1;
+        seg1.id = "seg-1-uuid";
+        seg1.schedule_id = s.id;
+        seg1.segment_order = 1;
+        seg1.start_at = QDateTime(QDate(2026, 6, 1), QTime(9, 0));
+        seg1.end_at = QDateTime(QDate(2026, 6, 3), QTime(18, 0));
+        seg1.created_at = QDateTime::currentDateTime();
+        seg1.updated_at = QDateTime::currentDateTime();
+
+        Segment seg2;
+        seg2.id = "seg-2-uuid";
+        seg2.schedule_id = s.id;
+        seg2.segment_order = 2;
+        seg2.start_at = QDateTime(QDate(2026, 6, 5), QTime(9, 0));
+        seg2.end_at = QDateTime(QDate(2026, 6, 7), QTime(18, 0));
+        seg2.created_at = QDateTime::currentDateTime();
+        seg2.updated_at = QDateTime::currentDateTime();
+
+        s.segments.append(seg1);
+        s.segments.append(seg2);
+
+        // Add predecessors
+        s.predecessors.append("predecessor-uuid-1");
+        s.predecessors.append("predecessor-uuid-2");
+
+        // Save
+        QVERIFY(storage.saveSchedule(s));
+
+        // Load and Verify
+        Schedule loaded = storage.getScheduleById(s.id);
+        QCOMPARE(loaded.title, s.title);
+        QCOMPARE(loaded.segments.size(), 2);
+        QCOMPARE(loaded.segments[0].id, seg1.id);
+        QCOMPARE(loaded.segments[0].segment_order, 1);
+        QCOMPARE(loaded.segments[1].id, seg2.id);
+        QCOMPARE(loaded.segments[1].segment_order, 2);
+        
+        QCOMPARE(loaded.predecessors.size(), 2);
+        QVERIFY(loaded.predecessors.contains("predecessor-uuid-1"));
+        QVERIFY(loaded.predecessors.contains("predecessor-uuid-2"));
+
+        // Update (remove 1 segment and add 1 predecessor, remove 1 predecessor)
+        loaded.segments.removeLast(); // Keep only seg1
+        loaded.predecessors.removeOne("predecessor-uuid-2");
+        loaded.predecessors.append("predecessor-uuid-3");
+        loaded.updated_at = QDateTime::currentDateTime();
+
+        QVERIFY(storage.saveSchedule(loaded));
+
+        // Reload and Verify Update
+        Schedule reloaded = storage.getScheduleById(s.id);
+        QCOMPARE(reloaded.segments.size(), 1);
+        QCOMPARE(reloaded.segments[0].id, seg1.id);
+
+        QCOMPARE(reloaded.predecessors.size(), 2);
+        QVERIFY(reloaded.predecessors.contains("predecessor-uuid-1"));
+        QVERIFY(reloaded.predecessors.contains("predecessor-uuid-3"));
+        QVERIFY(!reloaded.predecessors.contains("predecessor-uuid-2"));
+    }
+
     void testSchedulerWarning() {
         LocalStorage storage;
         

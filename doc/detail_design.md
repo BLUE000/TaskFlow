@@ -1,4 +1,4 @@
-# TaskFlow 詳細設計書 (Detailed Design)
+﻿# TaskFlow 詳細設計書 (Detailed Design)
 
 本設計書は、基本設計に基づき、PHP（Web側）および C++（Qt6デスクトップ側）の各機能モジュールの具体的なクラス設計、関数定義（メソッドシグネチャ）、実行されるSQLクエリ、および同期アルゴリズムの詳細な処理フローを定義します。
 
@@ -425,3 +425,76 @@ C++（Qt 6）デスクトップアプリのビルド定義において、開発�
       )
   endif()
   ```
+
+---
+
+## 先行タスク機能 詳細設計
+
+### 1. schedule_predecessors テーブル詳細
+
+| カラム | 型 (MySQL) | 型 (SQLite) | 制約 | 説明 |
+|---|---|---|---|---|
+| id | VARCHAR(36) | TEXT | PK | UUID v4 |
+| schedule_id | VARCHAR(36) | TEXT | FK→schedules.id CASCADE | 後続タスクID |
+| predecessor_id | VARCHAR(36) | TEXT | FK→schedules.id CASCADE | 先行タスクID |
+| ― | ― | ― | UNIQUE(schedule_id, predecessor_id) | 重複防止 |
+
+### 2. ScheduleRepository 追加メソッド詳細
+
+#### savePredecessors(string , array ): bool
+
+`
+1. トランザクション開始
+2. DELETE FROM schedule_predecessors WHERE schedule_id = :sid  （既存全削除）
+3.  が空でなければ：
+   -  自身を除外（自己参照防止）
+   - 各  に対して INSERT INTO schedule_predecessors (id, schedule_id, predecessor_id) VALUES (uuid, :sid, :pid)
+4. トランザクションコミット
+5. 失敗時はロールバックして false を返す
+`
+
+#### indPredecessorsByScheduleId(string ): array
+
+`sql
+SELECT p.*, s.title AS pred_title, s.start_at AS pred_start, s.end_at AS pred_end
+FROM schedule_predecessors p
+JOIN schedules s ON p.predecessor_id = s.id
+WHERE p.schedule_id = :schedule_id AND s.is_deleted = 0
+ORDER BY s.start_at ASC
+`
+
+#### indSuccessorsByScheduleId(string ): array
+
+`sql
+SELECT p.*, s.title AS succ_title, s.start_at AS succ_start, s.end_at AS succ_end
+FROM schedule_predecessors p
+JOIN schedules s ON p.schedule_id = s.id
+WHERE p.predecessor_id = :predecessor_id AND s.is_deleted = 0
+ORDER BY s.start_at ASC
+`
+
+#### indAllPredecessorRelations(): array
+
+`sql
+SELECT schedule_id, predecessor_id FROM schedule_predecessors
+`
+（index.php でガントチャート描画用に全ペアを一括取得するためのメソッド）
+
+### 3. dmin.php 先行タスク選択UI 詳細
+
+- スケジュール編集フォームの「セグメント設定」セクションの直後に「先行タスク」セクションを追加する。
+- <select multiple> で既存の全スケジュール（is_deleted = 0, 	ype IN ('task','period')）を選択肢として列挙する。
+- 自分自身は選択肢から除外する。
+- フォーム送信時: $_POST['predecessors'] として ID 配列が渡される（未選択時は空配列）。
+- save_schedule アクション処理の末尾で $repo->savePredecessors(, ) を呼ぶ。
+
+### 4. index.php ガントチャート矢印描画 詳細
+
+- PHP側: indAllPredecessorRelations() でペア配列を取得し、JSON エンコードして <script> タグに埋め込む。
+- JavaScript側: ガントチャートの各バー要素にはスケジュールIDを data-schedule-id 属性として付与する。
+- 矢印描画ロジック:
+  1. predecessorRelations 配列をループ
+  2. predecessor_id の DOM バー要素と schedule_id の DOM バー要素を取得
+  3. 各バーの getBoundingClientRect() から座標を算出
+  4. SVGオーバーレイ（ガントチャートコンテナ上に絶対配置）に <path> マーカー付き矢印を描画
+  5. スクロール・リサイズ時に再描画

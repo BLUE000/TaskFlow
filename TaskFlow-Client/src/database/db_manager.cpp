@@ -112,6 +112,41 @@ bool DBManager::initialize(const QString& dbPath) {
         }
     }
 
+    // 5. schedule_segments テーブル
+    ok = query.exec(
+        "CREATE TABLE IF NOT EXISTS schedule_segments ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  schedule_id TEXT NOT NULL,"
+        "  segment_order INTEGER NOT NULL DEFAULT 1,"
+        "  start_at TEXT NOT NULL,"
+        "  end_at TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),"
+        "  updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),"
+        "  is_deleted INTEGER NOT NULL DEFAULT 0,"
+        "  FOREIGN KEY (schedule_id) REFERENCES schedules (id) ON DELETE CASCADE"
+        ");"
+    );
+    if (!ok) {
+        qCritical() << "Failed to create schedule_segments table:" << query.lastError().text();
+        return false;
+    }
+
+    // 6. schedule_predecessors テーブル
+    ok = query.exec(
+        "CREATE TABLE IF NOT EXISTS schedule_predecessors ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  schedule_id TEXT NOT NULL,"
+        "  predecessor_id TEXT NOT NULL,"
+        "  UNIQUE (schedule_id, predecessor_id),"
+        "  FOREIGN KEY (schedule_id) REFERENCES schedules (id) ON DELETE CASCADE,"
+        "  FOREIGN KEY (predecessor_id) REFERENCES schedules (id) ON DELETE CASCADE"
+        ");"
+    );
+    if (!ok) {
+        qCritical() << "Failed to create schedule_predecessors table:" << query.lastError().text();
+        return false;
+    }
+
     // 4. sync_metadata テーブル
     ok = query.exec(
         "CREATE TABLE IF NOT EXISTS sync_metadata ("

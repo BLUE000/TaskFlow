@@ -923,7 +923,7 @@ function h(string $str): string {
         const holidays = <?php echo json_encode($holidays, JSON_UNESCAPED_UNICODE); ?>;
         const categoryTimeDisplay = <?php echo json_encode(CATEGORY_TIME_DISPLAY, JSON_UNESCAPED_UNICODE); ?>;
 
-        let currentDate = new Date(2026, 5, 1); // 2026年6月を初期値とする (月は0始まりなので 5=6月)
+        let currentDate = new Date(); // 今日を初期値とする
         let currentView = 'month'; // 'month', 'week', 'gantt'
 
         // 選択されたカテゴリのセット (空の場合はすべて表示)
@@ -1653,8 +1653,59 @@ function h(string $str): string {
                 rightPanel.appendChild(emptyRowRight);
             }
 
+            // 座標記録用オブジェクト
+            const ganttCoords = {};
+
             // 各予定行の描画
-            targetEvents.forEach(event => {
+            targetEvents.forEach((event, index) => {
+                // 座標計算と記録
+                const startAtStr = event.start_at.substring(0, 10);
+                const endAtStr = event.end_at ? event.end_at.substring(0, 10) : startAtStr;
+                const startDateObj = parseLocalDate(startAtStr);
+                const endDateObj = parseLocalDate(endAtStr);
+                const startOffset = Math.max(0, Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                const endOffset = Math.min(timelineDays.length - 1, Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                const rowY = index * 48 + 24;
+
+                let startX = startOffset * 40;
+                let endX = (endOffset + 1) * 40;
+
+                if (event.type === 'milestone') {
+                    startX = startOffset * 40 + 20;
+                    endX = startOffset * 40 + 20;
+                } else {
+                    if (startAtStr === endAtStr) {
+                        startX = startOffset * 40 + 20;
+                        endX = startOffset * 40 + 20;
+                    } else {
+                        startX = startOffset * 40 + 8;
+                        endX = (endOffset + 1) * 40 - 8;
+                    }
+
+                    const segments = event.segments && Array.isArray(event.segments) && event.segments.length > 0 ? event.segments : null;
+                    if (segments) {
+                        const firstSeg = segments[0];
+                        const lastSeg = segments[segments.length - 1];
+                        const firstSegStartStr = firstSeg.start_at ? firstSeg.start_at.substring(0, 10) : null;
+                        if (firstSegStartStr) {
+                            const firstSegStartObj = parseLocalDate(firstSegStartStr);
+                            const firstSegStartOff = Math.max(0, Math.round((firstSegStartObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+                            const lastSegEndStr = lastSeg.end_at ? lastSeg.end_at.substring(0, 10) : firstSegStartStr;
+                            const lastSegEndObj = parseLocalDate(lastSegEndStr);
+                            const lastSegEndOff = Math.min(timelineDays.length - 1, Math.round((lastSegEndObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
+
+                            if (firstSegStartStr === lastSegEndStr) {
+                                startX = firstSegStartOff * 40 + 20;
+                                endX = firstSegStartOff * 40 + 20;
+                            } else {
+                                startX = firstSegStartOff * 40 + 8;
+                                endX = (lastSegEndOff + 1) * 40 - 8;
+                            }
+                        }
+                    }
+                }
+                ganttCoords[event.id] = { startX, endX, y: rowY };
+
                 // 左パネル追加
                 const rowHeader = document.createElement('div');
                 rowHeader.className = 'gantt-row-header';
@@ -1688,16 +1739,6 @@ function h(string $str): string {
                 });
 
                 // 予定のバーの配置計算
-                const startAtStr = event.start_at.substring(0, 10);
-                const endAtStr = event.end_at ? event.end_at.substring(0, 10) : startAtStr;
-
-                const startDateObj = parseLocalDate(startAtStr);
-                const endDateObj = parseLocalDate(endAtStr);
-
-                // 当月の開始日と終了日からのインデックス（オフセット）算出
-                const startOffset = Math.max(0, Math.round((startDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
-                const endOffset = Math.min(timelineDays.length - 1, Math.round((endDateObj - timelineDays[0]) / (1000 * 60 * 60 * 24)));
-
                 const durationDays = endOffset - startOffset + 1;
 
                 if (durationDays > 0) {
@@ -1968,6 +2009,77 @@ function h(string $str): string {
 
                 rightPanel.appendChild(rowBody);
             });
+
+            // 先行タスク（依存関係）矢印の描画
+            if (targetEvents.length > 0) {
+                const totalHeight = targetEvents.length * 48;
+                const svgNS = "http://www.w3.org/2000/svg";
+                const arrowSvg = document.createElementNS(svgNS, "svg");
+                arrowSvg.style.position = 'absolute';
+                arrowSvg.style.top = '48px';
+                arrowSvg.style.left = '0';
+                arrowSvg.style.width = `${daysInMonth * 40}px`;
+                arrowSvg.style.height = `${totalHeight}px`;
+                arrowSvg.style.pointerEvents = 'none';
+                arrowSvg.style.zIndex = '4';
+
+                const defs = document.createElementNS(svgNS, "defs");
+                const marker = document.createElementNS(svgNS, "marker");
+                marker.setAttribute("id", "gantt-arrow");
+                marker.setAttribute("viewBox", "0 0 10 10");
+                marker.setAttribute("refX", "6");
+                marker.setAttribute("refY", "5");
+                marker.setAttribute("markerWidth", "6");
+                marker.setAttribute("markerHeight", "6");
+                marker.setAttribute("orient", "auto-start-reverse");
+
+                const path = document.createElementNS(svgNS, "path");
+                path.setAttribute("d", "M 0 2 L 8 5 L 0 8 z");
+                path.setAttribute("fill", "rgba(56, 189, 248, 0.75)");
+
+                marker.appendChild(path);
+                defs.appendChild(marker);
+                arrowSvg.appendChild(defs);
+
+                targetEvents.forEach(event => {
+                    const successorId = event.id;
+                    const predecessors = event.predecessors || [];
+                    
+                    predecessors.forEach(predId => {
+                        if (ganttCoords[predId] && ganttCoords[successorId]) {
+                            const predCoord = ganttCoords[predId];
+                            const succCoord = ganttCoords[successorId];
+
+                            const x1 = predCoord.endX;
+                            const y1 = predCoord.y;
+                            const x2 = succCoord.startX;
+                            const y2 = succCoord.y;
+
+                            const link = document.createElementNS(svgNS, "path");
+                            
+                            let d = "";
+                            if (x2 >= x1 + 10) {
+                                const xMid = x1 + (x2 - x1) / 2;
+                                d = `M ${x1} ${y1} L ${xMid} ${y1} L ${xMid} ${y2} L ${x2} ${y2}`;
+                            } else {
+                                const xMid1 = x1 + 12;
+                                const yMid = y1 + (y2 - y1) / 2;
+                                const xMid2 = x2 - 12;
+                                d = `M ${x1} ${y1} L ${xMid1} ${y1} L ${xMid1} ${yMid} L ${xMid2} ${yMid} L ${xMid2} ${y2} L ${x2} ${y2}`;
+                            }
+
+                            link.setAttribute("d", d);
+                            link.setAttribute("stroke", "rgba(56, 189, 248, 0.45)");
+                            link.setAttribute("stroke-width", "1.5");
+                            link.setAttribute("fill", "none");
+                            link.setAttribute("marker-end", "url(#gantt-arrow)");
+                            arrowSvg.appendChild(link);
+                        }
+                    });
+                });
+
+                rightPanel.appendChild(arrowSvg);
+            }
 
             // 稲妻線と本日線のSVG描画 (今年今月のみ)
             if (isCurrentMonth && targetEvents.length > 0) {

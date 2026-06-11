@@ -5,6 +5,8 @@
 #include <QSqlError>
 #include <QVariant>
 #include <QDebug>
+#include <QMap>
+#include <QUuid>
 
 // --- 予定 (schedules) 操作 ---
 
@@ -21,6 +23,43 @@ QList<Schedule> LocalStorage::getAllSchedules(bool includeDeleted) {
     if (!query.exec(sql)) {
         qCritical() << "Failed to query schedules:" << query.lastError().text();
         return list;
+    }
+
+    // segments マッピング
+    QMap<QString, QList<Segment>> segmentsMap;
+    {
+        QSqlQuery segQuery(db);
+        if (segQuery.exec("SELECT id, schedule_id, segment_order, start_at, end_at, created_at, updated_at, is_deleted FROM schedule_segments WHERE is_deleted = 0 ORDER BY segment_order ASC")) {
+            while (segQuery.next()) {
+                Segment seg;
+                seg.id = segQuery.value(0).toString();
+                seg.schedule_id = segQuery.value(1).toString();
+                seg.segment_order = segQuery.value(2).toInt();
+                seg.start_at = QDateTime::fromString(segQuery.value(3).toString(), "yyyy-MM-dd HH:mm:ss");
+                seg.end_at = QDateTime::fromString(segQuery.value(4).toString(), "yyyy-MM-dd HH:mm:ss");
+                seg.created_at = QDateTime::fromString(segQuery.value(5).toString(), "yyyy-MM-dd HH:mm:ss");
+                seg.updated_at = QDateTime::fromString(segQuery.value(6).toString(), "yyyy-MM-dd HH:mm:ss");
+                seg.is_deleted = segQuery.value(7).toInt() != 0;
+                segmentsMap[seg.schedule_id].append(seg);
+            }
+        } else {
+            qCritical() << "Failed to query schedule_segments:" << segQuery.lastError().text();
+        }
+    }
+
+    // predecessors マッピング
+    QMap<QString, QList<QString>> predecessorsMap;
+    {
+        QSqlQuery predQuery(db);
+        if (predQuery.exec("SELECT schedule_id, predecessor_id FROM schedule_predecessors")) {
+            while (predQuery.next()) {
+                QString schedId = predQuery.value(0).toString();
+                QString predId = predQuery.value(1).toString();
+                predecessorsMap[schedId].append(predId);
+            }
+        } else {
+            qCritical() << "Failed to query schedule_predecessors:" << predQuery.lastError().text();
+        }
     }
 
     while (query.next()) {
@@ -48,6 +87,9 @@ QList<Schedule> LocalStorage::getAllSchedules(bool includeDeleted) {
         sched.is_deleted = query.value(11).toInt() != 0;
         sched.updated_at = QDateTime::fromString(query.value(12).toString(), "yyyy-MM-dd HH:mm:ss");
         sched.recurrence_group_id = query.value(13).toString();
+
+        sched.segments = segmentsMap.value(sched.id);
+        sched.predecessors = predecessorsMap.value(sched.id);
 
         list.append(sched);
     }
@@ -87,12 +129,43 @@ Schedule LocalStorage::getScheduleById(const QString& id) {
     sched.updated_at = QDateTime::fromString(query.value(12).toString(), "yyyy-MM-dd HH:mm:ss");
     sched.recurrence_group_id = query.value(13).toString();
 
+    // segments の取得
+    QSqlQuery segQuery(db);
+    segQuery.prepare("SELECT id, schedule_id, segment_order, start_at, end_at, created_at, updated_at, is_deleted FROM schedule_segments WHERE schedule_id = :schedule_id AND is_deleted = 0 ORDER BY segment_order ASC");
+    segQuery.bindValue(":schedule_id", sched.id);
+    if (segQuery.exec()) {
+        while (segQuery.next()) {
+            Segment seg;
+            seg.id = segQuery.value(0).toString();
+            seg.schedule_id = segQuery.value(1).toString();
+            seg.segment_order = segQuery.value(2).toInt();
+            seg.start_at = QDateTime::fromString(segQuery.value(3).toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.end_at = QDateTime::fromString(segQuery.value(4).toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.created_at = QDateTime::fromString(segQuery.value(5).toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.updated_at = QDateTime::fromString(segQuery.value(6).toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.is_deleted = segQuery.value(7).toInt() != 0;
+            sched.segments.append(seg);
+        }
+    }
+
+    // predecessors の取得
+    QSqlQuery predQuery(db);
+    predQuery.prepare("SELECT predecessor_id FROM schedule_predecessors WHERE schedule_id = :schedule_id");
+    predQuery.bindValue(":schedule_id", sched.id);
+    if (predQuery.exec()) {
+        while (predQuery.next()) {
+            sched.predecessors.append(predQuery.value(0).toString());
+        }
+    }
+
     return sched;
 }
 
 bool LocalStorage::saveSchedule(const Schedule& sched) {
     QSqlDatabase db = DBManager::instance().database();
-    QSqlQuery query(db);
+    
+    // トランザクションの開始
+    bool transactionStarted = db.transaction();
 
     // 暗号化処理
     QString encTitle;
@@ -102,9 +175,11 @@ bool LocalStorage::saveSchedule(const Schedule& sched) {
         encDesc = sched.description.isEmpty() ? "" : CryptoUtil::encrypt(sched.description);
     } catch (const std::exception& e) {
         qCritical() << "Encryption failed for schedule" << sched.id << ":" << e.what();
+        if (transactionStarted) db.rollback();
         return false;
     }
 
+    QSqlQuery query(db);
     query.prepare(
         "INSERT INTO schedules (id, title, description, type, start_at, end_at, status, priority, weight, time_slot_id, is_public, is_deleted, updated_at, recurrence_group_id) "
         "VALUES (:id, :title, :description, :type, :start_at, :end_at, :status, :priority, :weight, :time_slot_id, :is_public, :is_deleted, :updated_at, :recurrence_group_id) "
@@ -141,8 +216,89 @@ bool LocalStorage::saveSchedule(const Schedule& sched) {
 
     if (!query.exec()) {
         qCritical() << "Failed to save schedule:" << query.lastError().text();
+        if (transactionStarted) db.rollback();
         return false;
     }
+
+    // セグメント情報の保存
+    QSqlQuery delSegQuery(db);
+    delSegQuery.prepare("UPDATE schedule_segments SET is_deleted = 1, updated_at = :updated_at WHERE schedule_id = :schedule_id AND is_deleted = 0");
+    delSegQuery.bindValue(":schedule_id", sched.id);
+    delSegQuery.bindValue(":updated_at", QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    if (!delSegQuery.exec()) {
+        qCritical() << "Failed to mark old segments as deleted:" << delSegQuery.lastError().text();
+        if (transactionStarted) db.rollback();
+        return false;
+    }
+
+    QSqlQuery insSegQuery(db);
+    insSegQuery.prepare(
+        "INSERT INTO schedule_segments (id, schedule_id, segment_order, start_at, end_at, created_at, updated_at, is_deleted) "
+        "VALUES (:id, :schedule_id, :segment_order, :start_at, :end_at, :created_at, :updated_at, 0) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "  segment_order = excluded.segment_order, "
+        "  start_at = excluded.start_at, "
+        "  end_at = excluded.end_at, "
+        "  updated_at = excluded.updated_at, "
+        "  is_deleted = excluded.is_deleted"
+    );
+
+    for (const Segment& seg : sched.segments) {
+        QString segId = seg.id;
+        if (segId.isEmpty()) {
+            segId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        insSegQuery.bindValue(":id", segId);
+        insSegQuery.bindValue(":schedule_id", sched.id);
+        insSegQuery.bindValue(":segment_order", seg.segment_order);
+        insSegQuery.bindValue(":start_at", seg.start_at.toString("yyyy-MM-dd HH:mm:ss"));
+        insSegQuery.bindValue(":end_at", seg.end_at.toString("yyyy-MM-dd HH:mm:ss"));
+        insSegQuery.bindValue(":created_at", seg.created_at.isValid() ? seg.created_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+        insSegQuery.bindValue(":updated_at", seg.updated_at.isValid() ? seg.updated_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+
+        if (!insSegQuery.exec()) {
+            qCritical() << "Failed to save segment:" << insSegQuery.lastError().text();
+            if (transactionStarted) db.rollback();
+            return false;
+        }
+    }
+
+    // 先行タスク情報の保存
+    QSqlQuery delPredQuery(db);
+    delPredQuery.prepare("DELETE FROM schedule_predecessors WHERE schedule_id = :schedule_id");
+    delPredQuery.bindValue(":schedule_id", sched.id);
+    if (!delPredQuery.exec()) {
+        qCritical() << "Failed to delete old predecessors:" << delPredQuery.lastError().text();
+        if (transactionStarted) db.rollback();
+        return false;
+    }
+
+    QSqlQuery insPredQuery(db);
+    insPredQuery.prepare("INSERT INTO schedule_predecessors (id, schedule_id, predecessor_id) VALUES (:id, :schedule_id, :predecessor_id)");
+    for (const QString& predId : sched.predecessors) {
+        if (predId == sched.id) {
+            continue; // 自己参照の防止
+        }
+        QString linkId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        insPredQuery.bindValue(":id", linkId);
+        insPredQuery.bindValue(":schedule_id", sched.id);
+        insPredQuery.bindValue(":predecessor_id", predId);
+
+        if (!insPredQuery.exec()) {
+            qCritical() << "Failed to save predecessor relation:" << insPredQuery.lastError().text();
+            if (transactionStarted) db.rollback();
+            return false;
+        }
+    }
+
+    // トランザクションのコミット
+    if (transactionStarted) {
+        if (!db.commit()) {
+            qCritical() << "Failed to commit transaction for saving schedule:" << db.lastError().text();
+            return false;
+        }
+    }
+
     return true;
 }
 

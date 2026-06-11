@@ -62,6 +62,29 @@ bool SyncClient::pull(const QDateTime& lastSyncedAt, QDateTime& serverTime,
         sched.is_deleted = obj["is_deleted"].toInt() != 0;
         sched.updated_at = QDateTime::fromString(obj["updated_at"].toString(), "yyyy-MM-dd HH:mm:ss");
         sched.recurrence_group_id = obj["recurrence_group_id"].toString();
+
+        // segments のパース
+        QJsonArray segArray = obj["segments"].toArray();
+        for (const QJsonValue& segVal : segArray) {
+            QJsonObject segObj = segVal.toObject();
+            Segment seg;
+            seg.id = segObj["id"].toString();
+            seg.schedule_id = segObj["schedule_id"].toString();
+            seg.segment_order = segObj["segment_order"].toInt();
+            seg.start_at = QDateTime::fromString(segObj["start_at"].toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.end_at = QDateTime::fromString(segObj["end_at"].toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.created_at = QDateTime::fromString(segObj["created_at"].toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.updated_at = QDateTime::fromString(segObj["updated_at"].toString(), "yyyy-MM-dd HH:mm:ss");
+            seg.is_deleted = segObj["is_deleted"].toInt() != 0;
+            sched.segments.append(seg);
+        }
+
+        // predecessors のパース
+        QJsonArray predArray = obj["predecessors"].toArray();
+        for (const QJsonValue& predVal : predArray) {
+            sched.predecessors.append(predVal.toString());
+        }
+
         schedules.append(sched);
     }
 
@@ -149,6 +172,30 @@ bool SyncClient::push(const QList<Schedule>& schedules, const QList<TimeSlot>& t
         obj["is_deleted"] = s.is_deleted ? 1 : 0;
         obj["updated_at"] = s.updated_at.isValid() ? s.updated_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
         obj["recurrence_group_id"] = s.recurrence_group_id;
+
+        // segments のJSON化
+        QJsonArray segArray;
+        for (const Segment& seg : s.segments) {
+            QJsonObject segObj;
+            segObj["id"] = seg.id;
+            segObj["schedule_id"] = seg.schedule_id;
+            segObj["segment_order"] = seg.segment_order;
+            segObj["start_at"] = seg.start_at.toString("yyyy-MM-dd HH:mm:ss");
+            segObj["end_at"] = seg.end_at.toString("yyyy-MM-dd HH:mm:ss");
+            segObj["created_at"] = seg.created_at.isValid() ? seg.created_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
+            segObj["updated_at"] = seg.updated_at.isValid() ? seg.updated_at.toString("yyyy-MM-dd HH:mm:ss") : QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
+            segObj["is_deleted"] = seg.is_deleted ? 1 : 0;
+            segArray.append(segObj);
+        }
+        obj["segments"] = segArray;
+
+        // predecessors のJSON化
+        QJsonArray predArray;
+        for (const QString& predId : s.predecessors) {
+            predArray.append(predId);
+        }
+        obj["predecessors"] = predArray;
+
         schedArray.append(obj);
     }
     dataObj["schedules"] = schedArray;

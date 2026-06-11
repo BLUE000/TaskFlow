@@ -103,3 +103,14 @@ CREATE TABLE IF NOT EXISTS `schedule_segments` (
 -- schedule_allocations に segment_id FKを追加
 ALTER TABLE `schedule_allocations`
   ADD CONSTRAINT `fk_allocations_segment` FOREIGN KEY (`segment_id`) REFERENCES `schedule_segments` (`id`) ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- 8. schedule_predecessors テーブル (先行タスク依存関係)
+CREATE TABLE IF NOT EXISTS schedule_predecessors (
+  id             VARCHAR(36) NOT NULL,
+  schedule_id    VARCHAR(36) NOT NULL COMMENT '後続タスクのschedule.id',
+  predecessor_id VARCHAR(36) NOT NULL COMMENT '先行タスクのschedule.id',
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_pred (schedule_id, predecessor_id),
+  CONSTRAINT fk_pred_schedule    FOREIGN KEY (schedule_id)    REFERENCES schedules (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_pred_predecessor FOREIGN KEY (predecessor_id) REFERENCES schedules (id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

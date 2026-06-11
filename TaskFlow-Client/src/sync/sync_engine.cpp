@@ -6,6 +6,27 @@
 #include <QCoreApplication>
 #include <QDebug>
 
+static bool compareSegments(const QList<Segment>& a, const QList<Segment>& b) {
+    if (a.size() != b.size()) return false;
+    for (int i = 0; i < a.size(); ++i) {
+        if (a[i].segment_order != b[i].segment_order ||
+            a[i].start_at != b[i].start_at ||
+            a[i].end_at != b[i].end_at ||
+            a[i].is_deleted != b[i].is_deleted) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool comparePredecessors(const QList<QString>& a, const QList<QString>& b) {
+    if (a.size() != b.size()) return false;
+    for (const QString& id : a) {
+        if (!b.contains(id)) return false;
+    }
+    return true;
+}
+
 SyncEngine::SyncEngine(QObject *receiver)
     : m_receiver(receiver), m_hasResolution(false), m_isSyncing(false) {}
 
@@ -140,7 +161,9 @@ void SyncEngine::runSync() {
                             qAbs(l.weight - r.weight) > 0.001 ||
                             l.time_slot_id != r.time_slot_id ||
                             l.is_public != r.is_public ||
-                            l.is_deleted != r.is_deleted);
+                            l.is_deleted != r.is_deleted ||
+                            !compareSegments(l.segments, r.segments) ||
+                            !comparePredecessors(l.predecessors, r.predecessors));
 
             if (hasDiff) {
                 // 衝突発生！UIスレッドの介入を待つ

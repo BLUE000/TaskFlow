@@ -1,4 +1,4 @@
--- 1. webhooks テーブル (Discord Webhook 設定)
+﻿-- 1. webhooks テーブル (Discord Webhook 設定)
 CREATE TABLE IF NOT EXISTS `webhooks` (
   `id` TEXT NOT NULL PRIMARY KEY,
   `name` TEXT NOT NULL,
@@ -100,3 +100,13 @@ CREATE TABLE IF NOT EXISTS `schedule_segments` (
 
 -- 初期データの登録 (最終同期時刻の初期化)
 INSERT OR IGNORE INTO `sync_metadata` (`key`, `value`) VALUES ('last_synced_at', '1970-01-01 00:00:00');
+
+-- 9. schedule_predecessors テーブル (先行タスク依存関係)
+CREATE TABLE IF NOT EXISTS schedule_predecessors (
+  id             TEXT NOT NULL PRIMARY KEY,
+  schedule_id    TEXT NOT NULL,
+  predecessor_id TEXT NOT NULL,
+  UNIQUE (schedule_id, predecessor_id),
+  FOREIGN KEY (schedule_id)    REFERENCES schedules (id) ON DELETE CASCADE,
+  FOREIGN KEY (predecessor_id) REFERENCES schedules (id) ON DELETE CASCADE
+);

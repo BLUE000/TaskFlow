@@ -3,6 +3,18 @@
 
 #include <QString>
 #include <QDateTime>
+#include <QList>
+
+struct Segment {
+    QString id;
+    QString schedule_id;
+    int segment_order = 1;
+    QDateTime start_at;
+    QDateTime end_at;
+    QDateTime created_at;
+    QDateTime updated_at;
+    bool is_deleted = false;
+};
 
 struct Schedule {
     QString id;
@@ -17,6 +29,8 @@ struct Schedule {
     bool is_deleted = false;
     QDateTime updated_at;
     QString recurrence_group_id;
+    QList<Segment> segments;
+    QList<QString> predecessors; // list of predecessor schedule IDs
 };
 
 #endif // SCHEDULE_H
