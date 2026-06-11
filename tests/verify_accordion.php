@@ -43,12 +43,14 @@ function assertContains($target, $content, $testId, $message) {
     }
 }
 
-// 1. JS関数の存在検証
-assertContains("function toggleSectionVisibility(containerId, iconId)", $html, "ST-ACCORDION-01", "toggleSectionVisibility JavaScript function is defined.");
+// 1. JS関数の存在検証 (外部JSファイルを検証)
+$jsContent = file_exists(__DIR__ . '/../public/js/admin.js') ? file_get_contents(__DIR__ . '/../public/js/admin.js') : '';
+assertContains("function toggleSectionVisibility(containerId, iconId)", $jsContent, "ST-ACCORDION-01", "toggleSectionVisibility JavaScript function is defined.");
 
-// 2. CSSクラスの存在検証
-assertContains(".accordion-header {", $html, "ST-ACCORDION-02-A", "accordion-header CSS class is defined.");
-assertContains(".accordion-icon {", $html, "ST-ACCORDION-02-B", "accordion-icon CSS class is defined.");
+// 2. CSSクラスの存在検証 (外部CSSファイルを検証)
+$cssContent = file_exists(__DIR__ . '/../public/css/admin.css') ? file_get_contents(__DIR__ . '/../public/css/admin.css') : '';
+assertContains(".accordion-header {", $cssContent, "ST-ACCORDION-02-A", "accordion-header CSS class is defined.");
+assertContains(".accordion-icon {", $cssContent, "ST-ACCORDION-02-B", "accordion-icon CSS class is defined.");
 
 // 3. 予定一覧のアコーディオン要素検証
 assertContains("active-schedules-container", $html, "ST-ACCORDION-03-A", "Container active-schedules-container ID is present.");

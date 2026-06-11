@@ -139,7 +139,7 @@ try {
     
     // C++ クライアントが status='todo' としてプッシュしてきた場合でも、
     // サーバー上の進捗合計（50%）を元に 'doing' に補正されるか検証
-    $targetUrl = "http://localhost:8000/sync.php";
+    $targetUrl = "http://localhost:8888/sync.php";
     $apiToken = "tc_f2d6ccf601dd459b515215fd";
     
     $encTitle = CryptoUtil::encrypt('進捗テストタスク');
