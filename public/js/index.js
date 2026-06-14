@@ -1208,9 +1208,14 @@ function renderGanttChart() {
                 const startDateObj = parseLocalDate(startAtStr);
                 const endDateObj = parseLocalDate(endAtStr);
 
-                // 完了済み（done）かつ終了日が過去 → 稲妻線の頂点に含めない
-                const isDoneAndPast = P_total >= 100 && endDateObj < today;
-                if (isDoneAndPast) {
+                const isPast = endDateObj < today;
+                const isFuture = startDateObj > today;
+
+                // 頂点計算を行わない（x = x_today のまままっすぐ通過）ケース:
+                // 1. 過去のタスクで、完了している（P_total >= 100）
+                // 2. 未来のタスクで、未着手である（P_total === 0）
+                const skipCalculation = (isPast && P_total >= 100) || (isFuture && P_total === 0);
+                if (skipCalculation) {
                     // x = x_today のまま（稲妻線をその行でまっすぐ通過）
                     points.push(`${x},${y}`);
                     return; // 進捗ドットも描かない
