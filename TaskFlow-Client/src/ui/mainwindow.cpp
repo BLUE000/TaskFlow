@@ -33,6 +33,13 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::initUi() {
+    // ウィンドウタイトルの設定（CMakeで定義されたバージョンを使用）
+#ifdef APP_VERSION
+    setWindowTitle(QString("TaskFlow-Client v%1").arg(APP_VERSION));
+#else
+    setWindowTitle("TaskFlow-Client");
+#endif
+
     // 予定タイプのコンボボックス初期化
     ui->cmbType->addItem("Auto Detect (自動判定)", "auto");
     ui->cmbType->addItem("Simple Schedule (簡易予定)", "simple");

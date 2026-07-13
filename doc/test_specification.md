@@ -1,4 +1,4 @@
-﻿# TaskFlow テスト仕様書 (Test Specification)
+# TaskFlow テスト仕様書 (Test Specification)
 
 V字モデルに基づき、各設計フェーズに対応するテストケースを定義します。テスト実行時は、本仕様書に従って合否（Pass/Fail）を判定します。
 
@@ -123,3 +123,21 @@ Web（閲覧・簡易管理）および C++アプリのユーザーシナリオ�
 | ST-PRE-01 | 先行タスクの登録 | タスクA・タスクBが登録済み | 管理画面でタスクBの編集フォームを開き、「先行タスク」にタスクAを選択して保存する。 | schedule_predecessors テーブルに (schedule_id=B.id, predecessor_id=A.id) のレコードが追加されること。 |
 | ST-PRE-02 | 先行タスクの削除 | ST-PRE-01 の状態（A→B の依存関係あり） | 管理画面でタスクBの編集フォームを開き、「先行タスク」の選択を解除して保存する。 | schedule_predecessors から該当レコードが削除され、依存関係が解消されること。 |
 | ST-PRE-03 | ガントチャートへの矢印描画 | ST-PRE-01 の状態（A→B の依存関係あり）かつ両タスクが is_public = 1 | index.php のガントチャート画面を表示する。 | タスクAバーの右端からタスクBバーの左端へ矢印が描画されること。 |
+
+---
+
+### 3.8. 予定取得API テスト
+
+| テストID | テストケース名 | 前提データ/条件 | 操作手順 | 期待結果 (合格) |
+| :--- | :--- | :--- | :--- | :--- |
+| ST-API-01 | 正常なデータ取得 (タスク) | `is_public = 1`, `category = 'work'`, `type = 'task'` のタスクAが存在。進捗データ (50%) あり。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | ステータス `200 OK` が返却され、レスポンスの JSON にタスクAが含まれ、`title` が暗号化されたBase64のまま、`progress_rate` が `50`、`start_at`, `end_at` が含まれていること。 |
+| ST-API-02 | 正常なデータ取得 (簡易・期間予定) | `is_public = 1`, `category = 'work'`, `type = 'simple'` の予定Bが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON に予定Bが含まれ、`title` が暗号化されたBase64のまま、`start_at`, `end_at` が含まれ、`progress_rate` フィールドは含まれていないこと。 |
+| ST-API-03 | 正常なデータ取得 (マイルストーン) | `is_public = 1`, `category = 'work'`, `type = 'milestone'` のマイルストーンCが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON にマイルストーンCが含まれ、`title` が暗号化されたBase64のまま、`date` フィールド（`start_at` の日付部分）が含まれ、`start_at`/`end_at`/`progress_rate` フィールドは含まれていないこと。 |
+| ST-API-04 | 期間外予定の除外 | 期間 `2026-06-15〜2026-06-20` の予定Dが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON データの配列に、期間外である予定Dが含まれていないこと。 |
+| ST-API-05 | 非公開予定の非表示担保 | `is_public = 0`, `category = 'work'` の予定Eが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON データの配列に、非公開の予定Eが含まれていないこと。 |
+| ST-API-06 | 削除済み予定の除外 | `is_public = 1`, `is_deleted = 1` の予定Fが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON データの配列に、削除済みの予定Fが含まれていないこと。 |
+| ST-API-07 | やることメモの除外 | `is_public = 1`, `type = 'memo'` のメモGが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON データの配列に、日付未定メモGが含まれていないこと。 |
+| ST-API-08 | カテゴリ絞り込み | `category = 'private'` の公開予定Hが存在。 | `GET /schedules.php?category=work&start_date=2026-06-08&days=7` を実行する。 | レスポンスの JSON データの配列に、別カテゴリの予定Hが含まれていないこと。 |
+| ST-API-09 | パラメータ不足によるエラー | 特になし | `category` または `start_date` または `days` を省略してリクエストを送信する。 | ステータス `400 Bad Request` が返却され、エラーメッセージが JSON 形式で返却されること。 |
+| ST-API-10 | 無効なパラメータによるエラー | 特になし | `days` に `0` や `-5`、または `start_date` に不正な日付（`abcd-ef-gh`）を指定してリクエストを送信する。 | ステータス `400 Bad Request` が返却され、エラーメッセージが JSON 形式で返却されること。 |
+| ST-API-11 | GET以外のメソッドエラー | 特になし | `POST` メソッドで API にリクエストを送信する。 | ステータス `405 Method Not Allowed` が返却されること。 |

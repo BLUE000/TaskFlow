@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(TaskFlow-Client LANGUAGES CXX)
+
+# ローカル環境設定（コンパイラ・Qtパスなど）のインポート
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/local_env.cmake")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/local_env.cmake")
+endif()
+
+project(TaskFlow-Client VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,6 +49,11 @@ set_target_properties(TaskFlow-Client PROPERTIES
 target_include_directories(TaskFlow-Client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# バージョン情報の定義
+target_compile_definitions(TaskFlow-Client PRIVATE
+    APP_VERSION="${PROJECT_VERSION}"
 )
 
 # リンクライブラリディレクトリの設定 (相対パス)
@@ -97,6 +108,11 @@ set_target_properties(TaskFlow-Client-Test PROPERTIES
 target_include_directories(TaskFlow-Client-Test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# バージョン情報の定義
+target_compile_definitions(TaskFlow-Client-Test PRIVATE
+    APP_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_directories(TaskFlow-Client-Test PRIVATE

@@ -1,4 +1,4 @@
-﻿# TaskFlow 詳細設計書 (Detailed Design)
+# TaskFlow 詳細設計書 (Detailed Design)
 
 本設計書は、基本設計に基づき、PHP（Web側）および C++（Qt6デスクトップ側）の各機能モジュールの具体的なクラス設計、関数定義（メソッドシグネチャ）、実行されるSQLクエリ、および同期アルゴリズムの詳細な処理フローを定義します。
 
@@ -498,3 +498,79 @@ SELECT schedule_id, predecessor_id FROM schedule_predecessors
   3. 各バーの getBoundingClientRect() から座標を算出
   4. SVGオーバーレイ（ガントチャートコンテナ上に絶対配置）に <path> マーカー付き矢印を描画
   5. スクロール・リサイズ時に再描画
+
+---
+
+## 予定取得API 詳細設計 (schedules.php)
+
+### 1. バリデーション処理
+受け取ったクエリパラメータに対して以下の厳格な検証を行います。
+- `category`: `empty()` の場合はエラー。
+- `start_date`: 正しい日付（`strtotime` が成功し、フォーマットが `YYYY-MM-DD` であること）か検証。
+- `days`: `filter_var($days, FILTER_VALIDATE_INT)` を用いて1以上の整数であること。
+- 検証エラー時は `header('HTTP/1.1 400 Bad Request')` を設定し、`{"error": "..."}` 形式の JSON を返却して `exit` します。
+
+### 2. データアクセスおよび結合集計SQL
+N+1問題を完全に排除した単一の SQL クエリです。
+```sql
+SELECT 
+    s.id, 
+    s.type, 
+    s.title, 
+    s.start_at, 
+    s.end_at, 
+    COALESCE(prog.progress_rate, 0) AS progress_rate
+FROM schedules s
+LEFT JOIN (
+    SELECT schedule_id, SUM(progress_percent) AS progress_rate
+    FROM schedule_progress
+    GROUP BY schedule_id
+) prog ON s.id = prog.schedule_id
+WHERE s.is_public = 1 
+  AND s.is_deleted = 0 
+  AND s.category = :category
+  AND s.type != 'memo'
+  AND s.start_at IS NOT NULL
+  AND (
+      (s.end_at IS NOT NULL AND s.start_at <= :range_end AND s.end_at >= :range_start) OR
+      (s.end_at IS NULL AND s.start_at >= :range_start AND s.start_at <= :range_end)
+  )
+ORDER BY s.start_at ASC, s.id ASC
+```
+
+### 3. レスポンスフォーマットの成形
+取得した結果行をループ処理し、予定の `type` に応じて出力配列の構造を変更します。
+タイトル (`title`) は復号せず、DBから取得したBase64文字列（難読化データのまま）をそのまま設定します。
+
+- **タスク** (`type = 'task'`):
+  ```php
+  $result = [
+      'id' => $row['id'],
+      'type' => 'task',
+      'title' => $row['title'], // 暗号化したまま
+      'start_at' => $row['start_at'],
+      'end_at' => $row['end_at'],
+      'progress_rate' => min(100, (int)$row['progress_rate']) // 100%上限に丸める
+  ];
+  ```
+- **タダの予定** (`type = 'simple'` または `type = 'period'`):
+  ```php
+  $result = [
+      'id' => $row['id'],
+      'type' => $row['type'],
+      'title' => $row['title'], // 暗号化したまま
+      'start_at' => $row['start_at'],
+      'end_at' => $row['end_at']
+  ];
+  ```
+- **マイルストーン** (`type = 'milestone'`):
+  ```php
+  $result = [
+      'id' => $row['id'],
+      'type' => 'milestone',
+      'title' => $row['title'], // 暗号化したまま
+      'date' => date('Y-m-d', strtotime($row['start_at'])) // 日付部分のみ
+  ];
+  ```
+
+レスポンスは `{"status": "success", "data": [...]}` とし、`Content-Type: application/json; charset=utf-8` をヘッダーとして出力します。
