@@ -72,6 +72,18 @@ Testing/
 WIP_STATE.md
 .gitignore.bak
 
+# Editor settings
+.vscode/
+
+# Test output
+TaskFlow-Client/test_output.txt
+
+# Runtime data
+data/cookie.txt
+
+# Local assets
+tsukutta/
+
 # Dist and local env configs
 dist/
 local_env.cmake
